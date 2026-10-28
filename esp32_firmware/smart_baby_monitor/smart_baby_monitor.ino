@@ -35,8 +35,8 @@
 // 1. NETWORK & BACKEND CONFIGURATION
 // ==========================================
 // Enter your 2.4 GHz Wi-Fi credentials:
-const char* WIFI_SSID     = "YOUR_WIFI_SSID";
-const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+const char* WIFI_SSID     = "Nothing Phone 3a";
+const char* WIFI_PASSWORD = "Keerthuammu29@";
 
 // Local Backend URL (Use your computer's local IPv4 address, NOT 'localhost'):
 // Example: "http://192.168.60.178:8000/api/readings"

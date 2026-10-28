@@ -137,39 +137,29 @@ export default function MetricCards({
         </div>
       </div>
 
-      {/* 4. Room Environment (Optional Sensor Slot) */}
+      {/* 4. Network & Node Health */}
       <div className="glass-panel rounded-2xl p-5 relative overflow-hidden transition-all hover:border-slate-700">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Room Climate</span>
-            <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700">
-              Optional
+          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Node & Network</span>
+          <div className="p-2 rounded-xl bg-slate-800/80 text-sky-400">
+            <Radio className="w-4 h-4" />
+          </div>
+        </div>
+        <div className="mt-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-slate-400">Device Node:</span>
+            <span className="font-mono text-xs font-semibold text-slate-200">
+              {latestReading ? latestReading.device_id : "esp32-nursery-01"}
             </span>
           </div>
-          <div className="p-2 rounded-xl bg-slate-800/80 text-sky-400">
-            <Thermometer className="w-4 h-4" />
+          <div className="flex items-center justify-between mt-2">
+            <span className="text-xs text-slate-400">Local Wi-Fi:</span>
+            <span className="text-xs font-semibold text-emerald-400">802.11 b/g/n</span>
           </div>
         </div>
-        <div className="mt-3 flex items-center justify-between">
-          <div>
-            <div className="flex items-center gap-1">
-              <span className="text-2xl font-extrabold text-slate-300 font-mono">24.5</span>
-              <span className="text-xs font-semibold text-slate-400">°C</span>
-            </div>
-            <p className="text-[11px] text-slate-500 mt-0.5">Temperature</p>
-          </div>
-          <div className="h-8 w-px bg-slate-800" />
-          <div>
-            <div className="flex items-center gap-1">
-              <span className="text-2xl font-extrabold text-slate-300 font-mono">52</span>
-              <span className="text-xs font-semibold text-slate-400">%</span>
-            </div>
-            <p className="text-[11px] text-slate-500 mt-0.5">Humidity</p>
-          </div>
-        </div>
-        <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-500">
-          <span>Sensor Hardware</span>
-          <span className="italic">DHT11 Ready (Phase 6)</span>
+        <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
+          <span>Target Host</span>
+          <span className="font-mono text-slate-300">192.168.60.178:8000</span>
         </div>
       </div>
 
