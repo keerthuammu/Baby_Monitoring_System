@@ -1,5 +1,6 @@
 import React from 'react';
 import { Volume2, VolumeX, Shield, Thermometer, Droplets, Database, BellRing, Radio } from 'lucide-react';
+import { API_BASE_URL } from '../services/api';
 
 export default function MetricCards({ 
   latestReading, 
@@ -159,7 +160,12 @@ export default function MetricCards({
         </div>
         <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
           <span>Target Host</span>
-          <span className="font-mono text-slate-300">192.168.60.178:8000</span>
+          <span 
+            className="font-mono text-slate-300 truncate max-w-[150px]" 
+            title={API_BASE_URL}
+          >
+            {API_BASE_URL.replace(/^https?:\/\//, '')}
+          </span>
         </div>
       </div>
 

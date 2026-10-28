@@ -47,10 +47,7 @@ services:
         destination: /index.html
     envVars:
       - key: VITE_API_URL
-        fromService:
-          type: web
-          name: baby-monitor-backend
-          property: host
+        value: https://baby-monitor-backend-8m8o.onrender.com
 
 databases:
   # ----------------------------------------------------------------------------

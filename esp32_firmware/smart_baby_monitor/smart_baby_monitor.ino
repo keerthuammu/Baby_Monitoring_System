@@ -48,8 +48,8 @@ const char* API_KEY       = "baby_monitor_device_secret_key_123";
 // Unique Device Identifier:
 const char* DEVICE_ID     = "esp32-nursery-01";
 
-// Transmission interval in milliseconds (1000 - 2500 ms recommended):
-const unsigned long TRANSMIT_INTERVAL_MS = 1500;
+// Transmission interval in milliseconds (2000 ms recommended for cloud HTTPS):
+const unsigned long TRANSMIT_INTERVAL_MS = 2000;
 
 // ==========================================
 // 2. I2S MICROPHONE CONFIGURATION
@@ -149,18 +149,22 @@ void sendTelemetryToBackend(float soundLevel, float rms, int peak) {
   HTTPClient http;
   String urlStr = String(BACKEND_URL);
 
+  WiFiClientSecure secureClient;
+  WiFiClient plainClient;
+
   if (urlStr.startsWith("https://")) {
-    WiFiClientSecure secureClient;
     secureClient.setInsecure(); // Permits SSL handshake with Render cloud
+    secureClient.setTimeout(6000);
     http.begin(secureClient, BACKEND_URL);
   } else {
-    WiFiClient client;
-    http.begin(client, BACKEND_URL);
+    plainClient.setTimeout(4000);
+    http.begin(plainClient, BACKEND_URL);
   }
-  http.setTimeout(4000); // 4.0 second timeout for cloud latency
+  http.setTimeout(6000); // 6.0 second timeout for cloud HTTPS latency
 
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-API-Key", API_KEY);
+  http.addHeader("User-Agent", "ESP32-BabyMonitor/1.0");
 
   // Construct JSON payload
   char jsonBuffer[256];
@@ -174,14 +178,15 @@ void sendTelemetryToBackend(float soundLevel, float rms, int peak) {
     peak
   );
 
-  int httpCode = http.POST((uint8_t*)jsonBuffer, strlen(jsonBuffer));
+  int httpCode = http.POST(String(jsonBuffer));
 
   if (httpCode == HTTP_CODE_CREATED || httpCode == HTTP_CODE_OK) {
     Serial.printf("[HTTP 201] Sent -> %.1f dB | RMS: %.1f | Peak: %d\n", soundLevel, rms, peak);
   } else if (httpCode > 0) {
-    Serial.printf("[HTTP ERROR] Server responded with code: %d\n", httpCode);
+    String resp = http.getString();
+    Serial.printf("[HTTP ERROR %d] %s\n", httpCode, resp.c_str());
   } else {
-    Serial.printf("[HTTP FAILED] Connection failed (%s). Check server IP & Firewall.\n", http.errorToString(httpCode).c_str());
+    Serial.printf("[HTTP FAILED] Connection failed (%s). Check Wi-Fi connection.\n", http.errorToString(httpCode).c_str());
   }
 
   http.end();
