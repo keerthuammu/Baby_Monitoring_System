@@ -80,10 +80,14 @@ class YamnetClassifier:
         if len(signal.shape) > 1:
             signal = signal.mean(axis=1)
 
-        # Resample to 16 kHz if necessary
+        # Resample to 16 kHz if necessary (lightning fast linear interpolation)
         if sample_rate != 16000 and sample_rate > 0:
             target_samples = int(len(signal) * 16000 / sample_rate)
-            signal = scipy.signal.resample(signal, target_samples).astype(np.float32)
+            signal = np.interp(
+                np.linspace(0, len(signal), target_samples, endpoint=False),
+                np.arange(len(signal)),
+                signal
+            ).astype(np.float32)
 
         # Normalize amplitude to [-1.0, 1.0]
         max_val = float(np.max(np.abs(signal)))
@@ -119,6 +123,15 @@ class YamnetClassifier:
         acoustic_class = acoustic_res.get("classification")
         acoustic_conf = acoustic_res.get("confidence", 0.5)
 
+        # Reset smoothing buffer if more than 4.0 seconds elapsed since previous audio chunk
+        if self.last_update_time is not None:
+            if (now - self.last_update_time).total_seconds() > 4.0:
+                self.recent_cry_scores.clear()
+
+        # If current frame is clearly non-crying (cry_score < 0.10), clear old crying history
+        if cry_score < 0.10:
+            self.recent_cry_scores.clear()
+
         # Smooth across last 3 inferences (rolling window) to prevent isolated spikes
         self.recent_cry_scores.append(cry_score)
         if len(self.recent_cry_scores) > 3:
@@ -133,23 +146,26 @@ class YamnetClassifier:
         ]
 
         # Classification decision boundaries:
-        # High confidence baby crying if YAMNet detects AudioSet cry OR acoustic pitch match
+        # 1. Possible Baby Crying: YAMNet AudioSet cry >= 0.35 OR physical infant cry profile
         if (smoothed_cry_score >= 0.35 and sound_level_db >= 45.0) or (acoustic_class == "POSSIBLE_CRYING"):
             code = "POSSIBLE_CRYING"
             display_label = "Possible Baby Crying"
             confidence = max(round(smoothed_cry_score, 2), round(acoustic_conf, 2))
-        elif (smoothed_cry_score >= 0.15 and sound_level_db >= 40.0) or (acoustic_class == "UNCERTAIN"):
+        elif smoothed_cry_score >= 0.15:
+            # Borderline / ambiguous crying signal
             code = "UNCERTAIN"
             display_label = "Uncertain"
-            confidence = round(smoothed_cry_score, 2) if smoothed_cry_score >= 0.15 else 0.50
+            confidence = round(smoothed_cry_score, 2)
         else:
+            # Definite non-crying sound (e.g. dog bark, speech, door slam, environmental)
             code = "OTHER_SOUND"
             display_label = "Other Sound"
             primary_other = top_classes[0]["score"] if top_classes else 0.80
             confidence = round(primary_other, 2)
 
-        # Update service cache
-        self.last_update_time = now
+        # Update service cache with inference completion timestamp
+        completion_time = datetime.now(timezone.utc)
+        self.last_update_time = completion_time
         self.last_classification = display_label
         self.last_confidence = confidence
         self.last_top_classes = top_classes
@@ -163,7 +179,7 @@ class YamnetClassifier:
             "peak_amplitude": peak_amp,
             "top_classes": top_classes,
             "crying_score_raw": round(cry_score, 3),
-            "timestamp": now.isoformat(),
+            "timestamp": completion_time.isoformat(),
             "status": "ACTIVE"
         }
 
