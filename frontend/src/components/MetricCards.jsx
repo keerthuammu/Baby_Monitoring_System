@@ -6,48 +6,69 @@ export default function MetricCards({
   latestReading, 
   stats, 
   isOnline,
-  latestEvent 
+  latestEvent,
+  audioStatus 
 }) {
   const soundLevel = latestReading ? latestReading.sound_level : 0;
   const rms = latestReading ? latestReading.rms_amplitude : 0;
   const peak = latestReading ? latestReading.peak_amplitude : 0;
 
-  // Determine sound category
-  let statusBadge = {
-    label: 'Offline',
-    color: 'bg-slate-700/50 text-slate-400 border-slate-600/30',
-    dotColor: 'bg-slate-500',
-    desc: 'Waiting for ESP32 connection...'
+  // 1. Separate Sound Intensity Category (Volume only)
+  let intensityCategory = "Low Sound";
+  let intensityBadgeStyle = "bg-emerald-500/15 text-emerald-400 border-emerald-500/30";
+  if (!isOnline) {
+    intensityCategory = "Offline";
+    intensityBadgeStyle = "bg-slate-700/40 text-slate-400 border-slate-600/30";
+  } else if (soundLevel >= 65.0) {
+    intensityCategory = "High Sound";
+    intensityBadgeStyle = "bg-rose-500/15 text-rose-400 border-rose-500/30";
+  } else if (soundLevel >= 45.0) {
+    intensityCategory = "Moderate Sound";
+    intensityBadgeStyle = "bg-amber-500/15 text-amber-400 border-amber-500/30";
+  }
+
+  // 2. Separate Sound Classification (Neural YAMNet Audio Recognition)
+  let classificationBadge = {
+    label: "Microphone or connection unavailable",
+    color: "bg-slate-700/50 text-slate-400 border-slate-600/30",
+    dotColor: "bg-slate-500",
+    confidence: null,
+    desc: "Awaiting audio stream from microphone...",
+    isLive: false
   };
 
-  if (isOnline) {
-    if (latestEvent && !latestEvent.acknowledged && latestEvent.classification === 'POSSIBLE_CRYING') {
-      statusBadge = {
-        label: 'Possible Crying',
-        color: 'bg-rose-500/15 text-rose-400 border-rose-500/30',
-        dotColor: 'bg-rose-500',
-        desc: 'Acoustic pattern matches crying signature'
+  const isAudioFresh = isOnline && audioStatus && audioStatus.is_fresh;
+
+  if (isAudioFresh) {
+    const rawClass = audioStatus.classification;
+    const conf = audioStatus.confidence ? Math.round(audioStatus.confidence * 100) : 0;
+
+    if (rawClass === "Possible Baby Crying" || rawClass === "POSSIBLE_CRYING") {
+      classificationBadge = {
+        label: "Possible Baby Crying",
+        color: "bg-rose-500/15 text-rose-400 border-rose-500/30",
+        dotColor: "bg-rose-500",
+        confidence: `${conf}%`,
+        desc: "Acoustic signature matches infant cry pattern",
+        isLive: true
       };
-    } else if (soundLevel >= 65) {
-      statusBadge = {
-        label: 'High Sound Activity',
-        color: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
-        dotColor: 'bg-amber-500',
-        desc: 'Elevated noise above 65 dB threshold'
-      };
-    } else if (soundLevel >= 45) {
-      statusBadge = {
-        label: 'Moderate Sound',
-        color: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
-        dotColor: 'bg-blue-500',
-        desc: 'Normal nursery sound activity'
+    } else if (rawClass === "Uncertain" || rawClass === "UNCERTAIN") {
+      classificationBadge = {
+        label: "Uncertain",
+        color: "bg-amber-500/15 text-amber-400 border-amber-500/30",
+        dotColor: "bg-amber-500",
+        confidence: conf > 0 ? `${conf}%` : "50%",
+        desc: "Ambiguous or borderline acoustic profile",
+        isLive: true
       };
     } else {
-      statusBadge = {
-        label: 'Quiet Nursery',
-        color: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
-        dotColor: 'bg-emerald-500',
-        desc: 'Calm ambient acoustic baseline'
+      classificationBadge = {
+        label: "Other Sound",
+        color: "bg-sky-500/15 text-sky-400 border-sky-500/30",
+        dotColor: "bg-sky-400",
+        confidence: conf > 0 ? `${conf}%` : "80%",
+        desc: "Ambient, door, speech or environmental audio",
+        isLive: true
       };
     }
   }
@@ -58,40 +79,56 @@ export default function MetricCards({
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
       
-      {/* 1. Acoustic Classification Card */}
+      {/* 1. Neural Sound Classification Card */}
       <div className="glass-panel rounded-2xl p-5 relative overflow-hidden transition-all hover:border-slate-700">
         <div className="flex items-center justify-between">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Acoustic Status</span>
+          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Sound Classification</span>
           <div className="p-2 rounded-xl bg-slate-800/80 text-indigo-400">
             <Radio className="w-4 h-4" />
           </div>
         </div>
         <div className="mt-3">
           <div className="flex items-center gap-2">
-            <span className={`w-2.5 h-2.5 rounded-full ${statusBadge.dotColor} animate-pulse`} />
-            <h4 className="text-lg font-bold text-white tracking-tight">{statusBadge.label}</h4>
+            <span className={`w-2.5 h-2.5 rounded-full ${classificationBadge.dotColor} ${classificationBadge.isLive ? 'animate-pulse' : ''}`} />
+            <h4 className="text-base font-bold text-white tracking-tight truncate" title={classificationBadge.label}>
+              {classificationBadge.label}
+            </h4>
           </div>
-          <p className="text-xs text-slate-400 mt-1">{statusBadge.desc}</p>
+          <div className="flex items-center justify-between mt-1 text-xs">
+            <p className="text-slate-400 truncate max-w-[170px]" title={classificationBadge.desc}>{classificationBadge.desc}</p>
+            {classificationBadge.confidence && (
+              <span className="font-mono font-bold text-slate-200 bg-slate-800/90 px-1.5 py-0.5 rounded border border-slate-700 text-[11px]">
+                {classificationBadge.confidence}
+              </span>
+            )}
+          </div>
         </div>
         <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
-          <span>Classifier State</span>
-          <span className="font-mono text-slate-300">ESP32 I²S Audio Pipeline</span>
+          <span>Engine Status</span>
+          <span className="font-mono text-slate-300">
+            {classificationBadge.isLive ? "Local YAMNet (Active)" : "Unavailable"}
+          </span>
         </div>
       </div>
 
-      {/* 2. Live Sound Level (dB) Card */}
+      {/* 2. Live Sound Level (dB) & Sound Intensity Card */}
       <div className="glass-panel rounded-2xl p-5 relative overflow-hidden transition-all hover:border-slate-700">
         <div className="flex items-center justify-between">
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Live Sound Level</span>
+          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Sound Intensity</span>
           <div className="p-2 rounded-xl bg-slate-800/80 text-emerald-400">
             <Volume2 className="w-4 h-4" />
           </div>
         </div>
-        <div className="mt-3 flex items-baseline gap-2">
-          <span className="text-3xl font-extrabold text-white tracking-tight font-mono">
-            {isOnline ? soundLevel.toFixed(1) : '--.-'}
+        <div className="mt-3 flex items-center justify-between">
+          <div className="flex items-baseline gap-2">
+            <span className="text-3xl font-extrabold text-white tracking-tight font-mono">
+              {isOnline ? soundLevel.toFixed(1) : '--.-'}
+            </span>
+            <span className="text-sm font-semibold text-slate-400">dB</span>
+          </div>
+          <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border ${intensityBadgeStyle}`}>
+            {intensityCategory}
           </span>
-          <span className="text-sm font-semibold text-slate-400">dB</span>
         </div>
 
         {/* Progress gauge bar */}

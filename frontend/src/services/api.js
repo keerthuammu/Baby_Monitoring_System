@@ -56,3 +56,10 @@ export async function fetchHealth() {
   if (!res.ok) throw new Error(`HTTP error ${res.status}`);
   return res.json();
 }
+
+export async function fetchAudioClassificationStatus() {
+  const res = await fetch(`${API_BASE_URL}/api/audio/status`);
+  if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+  return res.json();
+}
+

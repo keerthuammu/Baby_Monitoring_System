@@ -5,7 +5,7 @@ import MetricCards from './components/MetricCards';
 import SoundChart from './components/SoundChart';
 import EventsTable from './components/EventsTable';
 import ReadingsTable from './components/ReadingsTable';
-import { fetchStats, fetchReadingsHistory, fetchEvents, acknowledgeEvent, fetchDevices, API_BASE_URL } from './services/api';
+import { fetchStats, fetchReadingsHistory, fetchEvents, acknowledgeEvent, fetchDevices, fetchAudioClassificationStatus, API_BASE_URL } from './services/api';
 import { AlertCircle, ShieldCheck, HeartHandshake, Laptop } from 'lucide-react';
 
 export default function App() {
@@ -13,6 +13,7 @@ export default function App() {
   const [readings, setReadings] = useState([]);
   const [events, setEvents] = useState([]);
   const [devices, setDevices] = useState([]);
+  const [audioStatus, setAudioStatus] = useState(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [isAcknowledging, setIsAcknowledging] = useState(false);
@@ -23,17 +24,19 @@ export default function App() {
   const loadData = useCallback(async (isManual = false) => {
     if (isManual) setIsLoading(true);
     try {
-      const [statsData, readingsData, eventsData, devicesData] = await Promise.all([
+      const [statsData, readingsData, eventsData, devicesData, audioStatusData] = await Promise.all([
         fetchStats(),
         fetchReadingsHistory(40),
         fetchEvents(25),
-        fetchDevices()
+        fetchDevices(),
+        fetchAudioClassificationStatus().catch(() => null)
       ]);
 
       setStats(statsData);
       setReadings(readingsData);
       setEvents(eventsData);
       setDevices(devicesData);
+      setAudioStatus(audioStatusData);
       setLastSyncTime(new Date());
       setError(null);
     } catch (err) {
@@ -125,6 +128,7 @@ export default function App() {
           stats={stats}
           isOnline={isOnline}
           latestEvent={events.length > 0 ? events[0] : null}
+          audioStatus={audioStatus}
         />
 
         {/* Real-time Telemetry Line Chart */}
