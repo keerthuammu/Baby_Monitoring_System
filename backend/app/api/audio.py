@@ -6,11 +6,22 @@ from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, s
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import verify_device_api_key
+from app.audio.yamnet_classifier import YamnetClassifier
 from app.audio.classifier import AcousticClassifier
 from app.services.monitor_service import MonitorService
 from app.schemas.schemas import ReadingCreate
 
 router = APIRouter(prefix="/api/audio", tags=["Audio Classification"])
+
+@router.get("/status", status_code=status.HTTP_200_OK)
+def get_audio_classification_status():
+    """
+    Returns the real-time audio sound classification and confidence.
+    Enforces a freshness guard: if no audio is ingested within 6 seconds,
+    automatically marks status as 'Microphone or connection unavailable'.
+    """
+    classifier = YamnetClassifier.get_instance()
+    return classifier.get_current_status(staleness_seconds=6.0)
 
 @router.post("/classify", status_code=status.HTTP_200_OK)
 async def classify_audio_sample(
@@ -20,56 +31,42 @@ async def classify_audio_sample(
     _auth: bool = Depends(verify_device_api_key)
 ):
     """
-    Ingests and classifies an audio sample chunk.
-    Extracts acoustic features (F0 Pitch, RMS, Spectral Cry Band Ratio)
-    and determines whether the sound is Quiet, High Noise, or Possible Infant Crying.
+    Ingests and classifies an audio sample chunk locally using Google YAMNet ONNX.
+    Differentiates between:
+    - 'Possible Baby Crying'
+    - 'Other Sound'
+    - 'Uncertain'
     
     Privacy Protection:
-    The raw audio file is processed in memory and discarded immediately
-    without permanent disk retention.
+    Audio chunks are processed entirely in memory and immediately discarded.
     """
     try:
         content = await file.read()
-        
-        # Read WAV container
-        with wave.open(io.BytesIO(content), "rb") as wav:
-            n_channels = wav.getnchannels()
-            sample_width = wav.getsampwidth()
-            framerate = wav.getframerate()
-            n_frames = wav.getnframes()
-            
-            raw_data = wav.readframes(n_frames)
-            
-            # Convert to numpy array
-            if sample_width == 2:
-                signal = np.frombuffer(raw_data, dtype=np.int16)
-            elif sample_width == 4:
-                signal = np.frombuffer(raw_data, dtype=np.int32)
-            else:
-                signal = np.frombuffer(raw_data, dtype=np.int8)
-
-            # If stereo, convert to mono
-            if n_channels > 1:
-                signal = signal.reshape(-1, n_channels).mean(axis=1)
-
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to decode audio file. Ensure it is a valid WAV audio file: {str(e)}"
+            detail=f"Failed to read audio payload: {str(e)}"
         )
 
-    # Classify waveform
-    result = AcousticClassifier.classify_waveform(signal, sample_rate=framerate)
-    features = result["features"]
+    classifier = YamnetClassifier.get_instance()
+    result = classifier.classify_wav_bytes(content)
+
+    if result.get("status") == "UNAVAILABLE":
+        # Fallback to AcousticClassifier if WAV header was non-standard
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=result.get("reason", "Invalid audio container")
+        )
+
     classification = result["classification"]
     confidence = result["confidence"]
 
-    # Log reading and handle alert in database
+    # Record reading in database to update sound metrics
     reading_in = ReadingCreate(
         device_id=device_id,
-        sound_level=features["sound_level_db"],
-        rms_amplitude=features["rms"],
-        peak_amplitude=features["peak_amplitude"]
+        sound_level=result["sound_level_db"],
+        rms_amplitude=result["rms_amplitude"],
+        peak_amplitude=result["peak_amplitude"]
     )
     MonitorService.record_reading(
         db, 
@@ -83,5 +80,7 @@ async def classify_audio_sample(
         "device_id": device_id,
         "classification": classification,
         "confidence": confidence,
-        "features": features
+        "sound_level_db": result["sound_level_db"],
+        "top_classes": result.get("top_classes", [])
     }
+

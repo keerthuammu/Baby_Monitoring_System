@@ -82,3 +82,18 @@ def test_audio_endpoint_unauthorized(client):
     files = {"file": ("test.wav", wav_bytes, "audio/wav")}
     response = client.post("/api/audio/classify", files=files)
     assert response.status_code == 401
+
+def test_audio_status_endpoint(client):
+    """Verifies the GET /api/audio/status endpoint and freshness response."""
+    response = client.get("/api/audio/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert "classification" in data
+    assert "status" in data
+    assert data["classification"] in [
+        "Possible Baby Crying",
+        "Other Sound",
+        "Uncertain",
+        "Microphone or connection unavailable"
+    ]
+
