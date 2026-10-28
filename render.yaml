@@ -38,8 +38,6 @@ services:
   - type: web
     name: baby-monitor-frontend
     runtime: static
-    region: oregon
-    plan: free
     rootDir: frontend
     buildCommand: "npm install && npm run build"
     staticPublishPath: dist
@@ -60,6 +58,6 @@ databases:
   # ----------------------------------------------------------------------------
   - name: baby-monitor-db
     databaseName: baby_monitor_db
-    user: postgres
+    user: baby_monitor_admin
     region: oregon
     plan: free

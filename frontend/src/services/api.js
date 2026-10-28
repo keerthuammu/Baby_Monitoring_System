@@ -3,7 +3,8 @@
  */
 
 const rawUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-const API_BASE_URL = rawUrl.replace(/\/+$/, '');
+const formattedUrl = rawUrl.startsWith('http') ? rawUrl : `https://${rawUrl}`;
+const API_BASE_URL = formattedUrl.replace(/\/+$/, '');
 
 export async function fetchStats() {
   const res = await fetch(`${API_BASE_URL}/api/stats`);
