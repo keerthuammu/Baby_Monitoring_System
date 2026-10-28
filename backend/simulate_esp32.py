@@ -7,11 +7,15 @@ Sends clearly labeled measurements to the local FastAPI backend.
 """
 
 import time
+import os
+import sys
 import random
 import requests
 
-BACKEND_URL = "http://localhost:8000/api/readings"
-API_KEY = "baby_monitor_device_secret_key_123"
+# Target Ingestion Endpoint (Render Cloud by default, or localhost via CLI/env):
+DEFAULT_BACKEND = "https://baby-monitor-backend-8m8o.onrender.com/api/readings"
+BACKEND_URL = sys.argv[1] if (len(sys.argv) > 1 and sys.argv[1].startswith("http")) else os.getenv("BACKEND_URL", DEFAULT_BACKEND)
+API_KEY = os.getenv("API_KEY", "baby_monitor_device_secret_key_123")
 DEVICE_ID = "esp32-devkit-v1-simulated"
 
 HEADERS = {

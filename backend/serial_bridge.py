@@ -6,14 +6,17 @@ and forwards them to the local FastAPI backend (http://localhost:8000/api/readin
 Useful for college demonstrations when campus Wi-Fi blocks peer-to-peer device traffic (AP Isolation).
 """
 
+import os
 import sys
 import re
 import time
 import requests
 import serial.tools.list_ports
 
-BACKEND_URL = "http://localhost:8000/api/readings"
-API_KEY = "baby_monitor_device_secret_key_123"
+# Target Ingestion Endpoint (Render Cloud by default):
+DEFAULT_BACKEND = "https://baby-monitor-backend-8m8o.onrender.com/api/readings"
+BACKEND_URL = os.getenv("BACKEND_URL", DEFAULT_BACKEND)
+API_KEY = os.getenv("API_KEY", "baby_monitor_device_secret_key_123")
 HEADERS = {
     "Content-Type": "application/json",
     "X-API-Key": API_KEY
@@ -34,14 +37,27 @@ def find_esp32_port():
 
 def main():
     import serial
-    port = sys.argv[1] if len(sys.argv) > 1 else find_esp32_port()
+    # Support optional port and backend URL overrides via CLI:
+    # Example: python serial_bridge.py COM7 http://localhost:8000/api/readings
+    port = None
+    target_url = BACKEND_URL
+
+    for arg in sys.argv[1:]:
+        if arg.startswith("http"):
+            target_url = arg
+        elif arg.upper().startswith("COM") or "/dev/" in arg:
+            port = arg
+
+    if not port:
+        port = find_esp32_port()
+
     if not port:
         print("[ERROR] No USB Serial COM port detected for ESP32. Ensure USB cable is plugged in.")
         return
 
     print("=" * 65)
     print(f"Connecting to ESP32 on {port} at 115200 baud...")
-    print(f"Forwarding live acoustic telemetry -> {BACKEND_URL}")
+    print(f"Forwarding live acoustic telemetry -> {target_url}")
     print("=" * 65)
 
     try:
@@ -70,7 +86,7 @@ def main():
                     "peak_amplitude": peak
                 }
 
-                res = requests.post(BACKEND_URL, json=payload, headers=HEADERS, timeout=2.0)
+                res = requests.post(target_url, json=payload, headers=HEADERS, timeout=4.0)
                 if res.status_code == 201:
                     status_text = "LOUD / CRYING" if sound_level >= 65 else "QUIET / NORMAL"
                     print(f"[FORWARDED] {sound_level:5.1f} dB | RMS: {rms:6.1f} | Peak: {peak:5d} -> [{status_text}] HTTP 201 OK")
