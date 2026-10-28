@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     CRYING_CONFIDENCE_THRESHOLD: float = 0.70
     AUDIO_RETENTION_DAYS: int = 7
 
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def fix_postgres_scheme(cls, v: str) -> str:
+        if v and v.startswith("postgres://"):
+            return v.replace("postgres://", "postgresql://", 1)
+        return v
+
     @field_validator("CORS_ORIGINS", mode="after")
     @classmethod
     def parse_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:
