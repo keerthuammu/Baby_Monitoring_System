@@ -28,6 +28,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <driver/i2s.h>
 #include <math.h>
 
@@ -38,9 +39,8 @@
 const char* WIFI_SSID     = "Nothing Phone 3a";
 const char* WIFI_PASSWORD = "Keerthuammu29@";
 
-// Local Backend URL (Use your computer's local IPv4 address, NOT 'localhost'):
-// Example: "http://192.168.60.178:8000/api/readings"
-const char* BACKEND_URL   = "http://192.168.60.178:8000/api/readings";
+// Target Ingestion Endpoint (Appended with /api/readings):
+const char* BACKEND_URL   = "https://baby-monitor-backend-8m8o.onrender.com/api/readings";
 
 // Security API Key (must match API_KEY in backend/.env):
 const char* API_KEY       = "baby_monitor_device_secret_key_123";
@@ -147,8 +147,17 @@ void sendTelemetryToBackend(float soundLevel, float rms, int peak) {
   }
 
   HTTPClient http;
-  http.begin(BACKEND_URL);
-  http.setTimeout(2500); // 2.5 second timeout to prevent blocking audio loop
+  String urlStr = String(BACKEND_URL);
+
+  if (urlStr.startsWith("https://")) {
+    WiFiClientSecure secureClient;
+    secureClient.setInsecure(); // Permits SSL handshake with Render cloud
+    http.begin(secureClient, BACKEND_URL);
+  } else {
+    WiFiClient client;
+    http.begin(client, BACKEND_URL);
+  }
+  http.setTimeout(4000); // 4.0 second timeout for cloud latency
 
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-API-Key", API_KEY);
