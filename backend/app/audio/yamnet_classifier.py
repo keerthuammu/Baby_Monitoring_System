@@ -168,26 +168,38 @@ class YamnetClassifier:
         }
 
     def classify_wav_bytes(self, wav_bytes: bytes) -> Dict[str, Any]:
-        """Classifies a WAV audio container from bytes."""
+        """Classifies a WAV container or raw 16-bit mono 16kHz PCM from bytes."""
+        if len(wav_bytes) == 0:
+            return self._format_unavailable("Empty audio signal")
+
+        # Check for standard RIFF / WAV header
+        if len(wav_bytes) > 44 and wav_bytes[:4] == b"RIFF":
+            try:
+                with wave.open(io.BytesIO(wav_bytes), "rb") as wav:
+                    sample_rate = wav.getframerate()
+                    n_channels = wav.getnchannels()
+                    sample_width = wav.getsampwidth()
+                    n_frames = wav.getnframes()
+                    raw_data = wav.readframes(n_frames)
+
+                    if sample_width == 2:
+                        signal = np.frombuffer(raw_data, dtype=np.int16).astype(np.float32) / 32768.0
+                    elif sample_width == 4:
+                        signal = np.frombuffer(raw_data, dtype=np.int32).astype(np.float32) / 2147483648.0
+                    else:
+                        signal = np.frombuffer(raw_data, dtype=np.int8).astype(np.float32) / 128.0
+
+                    if n_channels > 1:
+                        signal = signal.reshape(-1, n_channels).mean(axis=1)
+
+                    return self.classify_waveform(signal, sample_rate=sample_rate)
+            except Exception:
+                pass
+
+        # Raw 16-bit PCM fallback (standard ESP32 stream format)
         try:
-            with wave.open(io.BytesIO(wav_bytes), "rb") as wav:
-                sample_rate = wav.getframerate()
-                n_channels = wav.getnchannels()
-                sample_width = wav.getsampwidth()
-                n_frames = wav.getnframes()
-                raw_data = wav.readframes(n_frames)
-
-                if sample_width == 2:
-                    signal = np.frombuffer(raw_data, dtype=np.int16).astype(np.float32) / 32768.0
-                elif sample_width == 4:
-                    signal = np.frombuffer(raw_data, dtype=np.int32).astype(np.float32) / 2147483648.0
-                else:
-                    signal = np.frombuffer(raw_data, dtype=np.int8).astype(np.float32) / 128.0
-
-                if n_channels > 1:
-                    signal = signal.reshape(-1, n_channels).mean(axis=1)
-
-                return self.classify_waveform(signal, sample_rate=sample_rate)
+            signal = np.frombuffer(wav_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+            return self.classify_waveform(signal, sample_rate=16000)
         except Exception as e:
             return self._format_unavailable(f"Invalid audio format: {str(e)}")
 

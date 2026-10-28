@@ -40,16 +40,23 @@ const char* WIFI_SSID     = "Nothing Phone 3a";
 const char* WIFI_PASSWORD = "Keerthuammu29@";
 
 // Target Ingestion Endpoint (Appended with /api/readings):
-const char* BACKEND_URL   = "https://baby-monitor-backend-8m8o.onrender.com/api/readings";
+// Can be set to local Windows IP e.g. "http://192.168.55.208:8000/api/readings" or Render cloud:
+const char* BACKEND_URL        = "http://192.168.55.208:8000/api/readings";
+
+// Local Audio Classification Endpoint (Windows machine running YAMNet locally):
+const char* AUDIO_CLASSIFY_URL = "http://192.168.55.208:8000/api/audio/classify";
 
 // Security API Key (must match API_KEY in backend/.env):
-const char* API_KEY       = "baby_monitor_device_secret_key_123";
+const char* API_KEY            = "baby_monitor_device_secret_key_123";
 
 // Unique Device Identifier:
-const char* DEVICE_ID     = "esp32-nursery-01";
+const char* DEVICE_ID          = "esp32-nursery-01";
 
-// Transmission interval in milliseconds (2000 ms recommended for cloud HTTPS):
+// Transmission interval in milliseconds (2000 ms recommended):
 const unsigned long TRANSMIT_INTERVAL_MS = 2000;
+
+// Audio classification chunk interval (2500 ms recommended):
+const unsigned long AUDIO_CHUNK_INTERVAL_MS = 2500;
 
 // ==========================================
 // 2. I2S MICROPHONE CONFIGURATION
@@ -62,17 +69,26 @@ const unsigned long TRANSMIT_INTERVAL_MS = 2000;
 #define SAMPLE_RATE       16000
 #define CHUNK_SIZE        512
 
+// 1.0 second of 16-bit 16kHz PCM audio buffer (32 KB RAM)
+#define AUDIO_BUFFER_SAMPLES 16000
+
 // ==========================================
 // GLOBAL STATE VARIABLES
 // ==========================================
 unsigned long lastTransmitTime = 0;
+unsigned long lastAudioTransmitTime = 0;
 unsigned long lastWifiRetryTime = 0;
 bool wifiConnected = false;
 
-// Audio window accumulation
+// Audio window accumulation for sound intensity (dB & RMS)
 double windowSumSquares = 0.0;
 int32_t windowPeak = 0;
 unsigned long windowSamplesCount = 0;
+
+// Raw PCM audio buffer for local YAMNet baby crying classification
+int16_t audioBuffer[AUDIO_BUFFER_SAMPLES];
+int audioBufferIdx = 0;
+
 
 // Initialize the ESP32 I2S Driver for INMP441
 void setupI2S() {
@@ -192,6 +208,30 @@ void sendTelemetryToBackend(float soundLevel, float rms, int peak) {
   http.end();
 }
 
+// Transmit buffered 16kHz PCM audio chunk to local YAMNet classifier
+void sendAudioChunkToBackend() {
+  if (WiFi.status() != WL_CONNECTED || audioBufferIdx < 8000) return;
+
+  HTTPClient http;
+  WiFiClient client;
+  http.begin(client, AUDIO_CLASSIFY_URL);
+  http.setTimeout(3000);
+  http.addHeader("Content-Type", "application/octet-stream");
+  http.addHeader("X-API-Key", API_KEY);
+  http.addHeader("X-Device-Id", DEVICE_ID);
+
+  int httpCode = http.POST((uint8_t*)audioBuffer, audioBufferIdx * sizeof(int16_t));
+  if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_CREATED) {
+    Serial.printf("[YAMNet AUDIO] Transmitted %d samples (HTTP %d)\n", audioBufferIdx, httpCode);
+  } else if (httpCode > 0) {
+    Serial.printf("[YAMNet AUDIO ERROR] Server responded with code: %d\n", httpCode);
+  }
+
+  http.end();
+  // Reset audio buffer index for next window
+  audioBufferIdx = 0;
+}
+
 void setup() {
   Serial.begin(115200);
   delay(1500);
@@ -200,7 +240,7 @@ void setup() {
   Serial.println("   Smart Baby Monitoring System — ESP32 IoT Node   ");
   Serial.println("=======================================================");
   Serial.printf("Device ID: %s\n", DEVICE_ID);
-  Serial.printf("Transmit Interval: %lu ms\n", TRANSMIT_INTERVAL_MS);
+  Serial.printf("Telemetry Interval: %lu ms | Audio Interval: %lu ms\n", TRANSMIT_INTERVAL_MS, AUDIO_CHUNK_INTERVAL_MS);
 
   // 1. Setup I2S Audio Hardware
   setupI2S();
@@ -233,12 +273,18 @@ void loop() {
         windowPeak = abs_sample;
       }
       windowSumSquares += (double)sample * (double)sample;
+
+      // Accumulate raw audio samples for local YAMNet classification
+      if (audioBufferIdx < AUDIO_BUFFER_SAMPLES) {
+        audioBuffer[audioBufferIdx++] = (int16_t)constrain(sample, -32768, 32767);
+      }
     }
     windowSamplesCount += samples_read;
   }
 
-  // 3. Periodic Telemetry Transmission
   unsigned long now = millis();
+
+  // 3. Periodic Sound Intensity Telemetry (every 2000 ms)
   if (now - lastTransmitTime >= TRANSMIT_INTERVAL_MS) {
     lastTransmitTime = now;
 
@@ -265,5 +311,11 @@ void loop() {
       windowPeak = 0;
       windowSamplesCount = 0;
     }
+  }
+
+  // 4. Periodic Audio Sample Stream for Local YAMNet Classification (every 2500 ms)
+  if (now - lastAudioTransmitTime >= AUDIO_CHUNK_INTERVAL_MS) {
+    lastAudioTransmitTime = now;
+    sendAudioChunkToBackend();
   }
 }
