@@ -20,13 +20,11 @@ def get_audio_classification_status():
     automatically marks status as 'Microphone or connection unavailable'.
     """
     classifier = YamnetClassifier.get_instance()
-    return classifier.get_current_status(staleness_seconds=6.0)
+    return classifier.get_current_status(staleness_seconds=10.0)
 
 @router.post("/classify", status_code=status.HTTP_200_OK)
 async def classify_audio_sample(
     request: Request,
-    file: Optional[UploadFile] = File(None, description="Audio file in WAV format"),
-    device_id: Optional[str] = Form(None),
     db: Session = Depends(get_db),
     _auth: bool = Depends(verify_device_api_key)
 ):
@@ -38,14 +36,26 @@ async def classify_audio_sample(
     - 'Other Sound'
     - 'Uncertain'
     """
-    target_device = device_id or request.headers.get("X-Device-Id") or "esp32-nursery-01"
+    target_device = request.headers.get("X-Device-Id") or "esp32-nursery-01"
+    content_type = request.headers.get("content-type", "")
 
     try:
-        content_type = request.headers.get("content-type", "")
-        if "multipart/form-data" in content_type and file is not None:
-            content = await file.read()
+        if "multipart/form-data" in content_type:
+            form = await request.form()
+            file = form.get("file")
+            if file is not None and hasattr(file, "read"):
+                content = await file.read()
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Missing 'file' in multipart form data"
+                )
+            if "device_id" in form and form["device_id"]:
+                target_device = str(form["device_id"])
         else:
             content = await request.body()
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
