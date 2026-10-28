@@ -5,7 +5,7 @@ import MetricCards from './components/MetricCards';
 import SoundChart from './components/SoundChart';
 import EventsTable from './components/EventsTable';
 import ReadingsTable from './components/ReadingsTable';
-import { fetchStats, fetchReadingsHistory, fetchEvents, acknowledgeEvent, fetchDevices } from './services/api';
+import { fetchStats, fetchReadingsHistory, fetchEvents, acknowledgeEvent, fetchDevices, API_BASE_URL } from './services/api';
 import { AlertCircle, ShieldCheck, HeartHandshake, Laptop } from 'lucide-react';
 
 export default function App() {
@@ -38,7 +38,7 @@ export default function App() {
       setError(null);
     } catch (err) {
       console.error('Polling error:', err);
-      setError('Unable to communicate with local backend (http://localhost:8000). Ensure FastAPI server is running.');
+      setError(`Unable to communicate with backend (${API_BASE_URL}). Ensure FastAPI server is running.`);
     } finally {
       if (isManual) setIsLoading(false);
     }

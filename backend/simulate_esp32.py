@@ -58,13 +58,13 @@ def run_simulation(interval: float = 2.0, count: int = 50):
         # Trigger an elevated sound burst every 10 readings for testing alerts
         if i % 10 in [7, 8, 9]:
             mode = "loud"
-            label = "🚨 [SIMULATED HIGH NOISE / CRYING]"
+            label = "[LOUD / CRYING]"
         elif i % 5 == 0:
             mode = "normal"
-            label = "🟡 [MODERATE NOISE]"
+            label = "[MODERATE NOISE]"
         else:
             mode = "quiet"
-            label = "🟢 [QUIET ROOM]"
+            label = "[QUIET ROOM]"
 
         payload = generate_reading(mode=mode)
 
@@ -73,11 +73,11 @@ def run_simulation(interval: float = 2.0, count: int = 50):
             if response.status_code == 201:
                 print(f"[{i}/{count}] {label} Sent: {payload['sound_level']} dB | RMS: {payload['rms_amplitude']} | Status: 201 Created")
             else:
-                print(f"[{i}/{count}] ❌ Server returned {response.status_code}: {response.text}")
+                print(f"[{i}/{count}] [ERROR] Server returned {response.status_code}: {response.text}")
         except requests.exceptions.ConnectionError:
-            print(f"[{i}/{count}] ⚠️ Connection Error: Ensure backend is running at {BACKEND_URL}")
+            print(f"[{i}/{count}] [WARN] Connection Error: Ensure backend is running at {BACKEND_URL}")
         except Exception as e:
-            print(f"[{i}/{count}] ⚠️ Error: {e}")
+            print(f"[{i}/{count}] [ERROR] {e}")
 
         time.sleep(interval)
 

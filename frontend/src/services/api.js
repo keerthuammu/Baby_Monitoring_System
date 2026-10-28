@@ -2,9 +2,9 @@
  * API Client for Smart Baby Monitoring System Backend
  */
 
-const rawUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const rawUrl = import.meta.env.VITE_API_URL || 'https://baby-monitor-backend-8m8o.onrender.com';
 const formattedUrl = rawUrl.startsWith('http') ? rawUrl : `https://${rawUrl}`;
-const API_BASE_URL = formattedUrl.replace(/\/+$/, '');
+export const API_BASE_URL = formattedUrl.replace(/\/+$/, '');
 
 export async function fetchStats() {
   const res = await fetch(`${API_BASE_URL}/api/stats`);
