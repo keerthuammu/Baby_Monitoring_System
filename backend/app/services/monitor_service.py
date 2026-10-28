@@ -40,7 +40,12 @@ class MonitorService:
         return device
 
     @staticmethod
-    def record_reading(db: Session, reading_in: ReadingCreate) -> SensorReading:
+    def record_reading(
+        db: Session, 
+        reading_in: ReadingCreate,
+        classification: Optional[str] = None,
+        confidence: Optional[float] = None
+    ) -> SensorReading:
         now = utc_now()
         recorded_at = reading_in.recorded_at or now
 
@@ -59,16 +64,27 @@ class MonitorService:
         db.add(reading)
 
         # Acoustic Event Handling
-        # Check if reading exceeds high sound threshold
-        if reading_in.sound_level >= settings.SOUND_HIGH_THRESHOLD:
-            MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now)
+        # Check if reading exceeds high sound threshold or has a specific alert classification
+        is_high_sound = reading_in.sound_level >= settings.SOUND_HIGH_THRESHOLD
+        is_alert_class = classification in ["POSSIBLE_CRYING", "HIGH_SOUND_ACTIVITY"]
+        
+        if is_high_sound or is_alert_class:
+            event_class = classification or "HIGH_SOUND_ACTIVITY"
+            event_conf = confidence if confidence is not None else 0.85
+            MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, event_conf)
 
         db.commit()
         db.refresh(reading)
         return reading
 
     @staticmethod
-    def _handle_elevated_sound_event(db: Session, device_id: str, current_time: datetime):
+    def _handle_elevated_sound_event(
+        db: Session, 
+        device_id: str, 
+        current_time: datetime,
+        classification: str = "HIGH_SOUND_ACTIVITY",
+        confidence: float = 0.85
+    ):
         """
         Groups continuous loud sound into an ongoing event (debouncing)
         rather than creating hundreds of duplicate event rows.
@@ -87,6 +103,9 @@ class MonitorService:
         if active_event:
             # Update existing event duration
             active_event.end_time = current_time
+            if classification == "POSSIBLE_CRYING":
+                active_event.classification = "POSSIBLE_CRYING"
+                active_event.confidence = max(active_event.confidence, confidence)
             start = to_utc(active_event.start_time)
             curr = to_utc(current_time)
             if start and curr:
@@ -98,8 +117,8 @@ class MonitorService:
                 start_time=current_time,
                 end_time=current_time,
                 duration_seconds=1.0,
-                classification="HIGH_SOUND_ACTIVITY",
-                confidence=0.85,
+                classification=classification,
+                confidence=confidence,
                 acknowledged=False,
                 created_at=current_time
             )

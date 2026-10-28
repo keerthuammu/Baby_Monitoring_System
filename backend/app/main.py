@@ -12,6 +12,7 @@ from app.schemas.schemas import HealthResponse
 from app.api.readings import router as readings_router
 from app.api.events import router as events_router
 from app.api.stats import router as stats_router
+from app.api.audio import router as audio_router
 
 # Configure logging
 logging.basicConfig(
@@ -52,6 +53,7 @@ app.add_middleware(
 app.include_router(readings_router)
 app.include_router(events_router)
 app.include_router(stats_router)
+app.include_router(audio_router)
 
 @app.get("/", tags=["General"])
 def root():
