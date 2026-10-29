@@ -155,28 +155,29 @@ void checkWifiConnection() {
   }
 }
 
-// Acoustic Pitch Autocorrelation Analyzer for Infant Cry Detection
-// Infant cries produce a fundamental pitch F0 between 350 Hz and 680 Hz (optimal voicing peak ~450-500 Hz)
+// Full-Spectrum Human Pitch Autocorrelation Analyzer
+// Searches complete vocal frequency range (85 Hz to 800 Hz) to cleanly distinguish
+// infant crying (330 Hz - 680 Hz) from adult voice (85 Hz - 250 Hz) and noise.
 float detectInfantCryPitch(const int16_t* buffer, int len, float sampleRate, float* outPeriodicity) {
   if (len < 512) {
     if (outPeriodicity) *outPeriodicity = 0.0f;
     return 0.0f;
   }
 
-  // Cry lag window at 16kHz:
-  // 680 Hz -> lag = 16000 / 680 ≈ 23
-  // 330 Hz -> lag = 16000 / 330 ≈ 48
-  int minLag = 23;
-  int maxLag = 48;
-  int testLen = (len - maxLag > 400) ? 400 : (len - maxLag);
+  // Full human pitch lag search bounds:
+  // 800 Hz -> lag = 20
+  // 85 Hz  -> lag = 188
+  int minLag = 20;
+  int maxLag = 188;
+  int testLen = 250; // ~15 ms slice
 
   int64_t energy0 = 0;
   for (int i = 0; i < testLen; i++) {
     energy0 += (int32_t)buffer[i] * (int32_t)buffer[i];
   }
-  if (energy0 < 10000) {
+  if (energy0 < 20000) {
     if (outPeriodicity) *outPeriodicity = 0.0f;
-    return 0.0f;
+    return 0.0f; // Silence / ambient
   }
 
   int bestLag = 0;
@@ -196,7 +197,8 @@ float detectInfantCryPitch(const int16_t* buffer, int len, float sampleRate, flo
   float periodicity = (float)maxCorr / (float)energy0;
   if (outPeriodicity) *outPeriodicity = periodicity;
 
-  if (bestLag > 0 && periodicity >= 0.28f) {
+  // Voiced periodicity threshold (must have clean harmonic peak >= 0.38)
+  if (bestLag > 0 && periodicity >= 0.38f) {
     return sampleRate / (float)bestLag;
   }
   return 0.0f;

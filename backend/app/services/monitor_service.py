@@ -99,29 +99,28 @@ class MonitorService:
         rather than creating hundreds of duplicate event rows.
         Upgrades event to POSSIBLE_CRYING if infant vocalization is detected.
         """
-        recent_threshold = current_time - timedelta(seconds=10)
+        recent_threshold = current_time - timedelta(seconds=8)
         active_event = (
             db.query(CryingEvent)
             .filter(
                 CryingEvent.device_id == device_id,
-                CryingEvent.end_time >= recent_threshold
+                CryingEvent.end_time >= recent_threshold,
+                CryingEvent.classification == classification
             )
             .order_by(desc(CryingEvent.start_time))
             .first()
         )
 
         if active_event:
-            # Update existing event duration
+            # Update existing event duration for same classification
             active_event.end_time = current_time
-            if classification == "POSSIBLE_CRYING":
-                active_event.classification = "POSSIBLE_CRYING"
-                active_event.confidence = max(active_event.confidence, confidence)
+            active_event.confidence = max(active_event.confidence, confidence)
             start = to_utc(active_event.start_time)
             curr = to_utc(current_time)
             if start and curr:
                 active_event.duration_seconds = max(1.0, (curr - start).total_seconds())
         else:
-            # Create a new event
+            # Create a separate new event (e.g. HIGH_SOUND_ACTIVITY or POSSIBLE_CRYING)
             new_event = CryingEvent(
                 device_id=device_id,
                 start_time=current_time,

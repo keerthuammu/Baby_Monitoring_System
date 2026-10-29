@@ -139,23 +139,22 @@ void checkWifiConnection() {
   }
 }
 
-// Acoustic Pitch Autocorrelation Analyzer for Infant Cry Detection
-// Infant cries produce a fundamental pitch F0 between 350 Hz and 680 Hz (optimal voicing peak ~450-500 Hz)
+// Full-Spectrum Human Pitch Autocorrelation Analyzer (85 Hz to 800 Hz)
 float detectInfantCryPitch(const int32_t* buffer, int len, float sampleRate, float* outPeriodicity) {
   if (len < 512) {
     if (outPeriodicity) *outPeriodicity = 0.0f;
     return 0.0f;
   }
 
-  int minLag = 23;
-  int maxLag = 48;
-  int testLen = (len - maxLag > 400) ? 400 : (len - maxLag);
+  int minLag = 20;  // 800 Hz
+  int maxLag = 188; // 85 Hz
+  int testLen = 250;
 
   int64_t energy0 = 0;
   for (int i = 0; i < testLen; i++) {
     energy0 += (int64_t)buffer[i] * (int64_t)buffer[i];
   }
-  if (energy0 < 10000) {
+  if (energy0 < 20000) {
     if (outPeriodicity) *outPeriodicity = 0.0f;
     return 0.0f;
   }
@@ -177,7 +176,7 @@ float detectInfantCryPitch(const int32_t* buffer, int len, float sampleRate, flo
   float periodicity = (float)maxCorr / (float)energy0;
   if (outPeriodicity) *outPeriodicity = periodicity;
 
-  if (bestLag > 0 && periodicity >= 0.28f) {
+  if (bestLag > 0 && periodicity >= 0.38f) {
     return sampleRate / (float)bestLag;
   }
   return 0.0f;

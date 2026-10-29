@@ -41,23 +41,14 @@ export default function ReadingsTable({ readings, events }) {
             </thead>
             <tbody className="divide-y divide-slate-800/60 text-slate-300">
               {displayedReadings.map((r) => {
-                // Check if this packet falls within an active/recent crying event
-                const readingTime = new Date(r.recorded_at).getTime();
-                const isCryingEvent = cryingEvents.some(e => {
-                  const start = new Date(e.start_time).getTime() - 2500;
-                  const end = (e.end_time ? new Date(e.end_time).getTime() : start) + (e.duration_seconds ? e.duration_seconds * 1000 : 4000) + 3000;
-                  return readingTime >= start && readingTime <= end;
-                });
-
                 const isEdgeCry = r.classification === 'POSSIBLE_CRYING' || (r.pitch_hz >= 300 && r.pitch_hz <= 680);
-                const isCrying = isEdgeCry || (isCryingEvent && r.sound_level >= 55.0);
                 const isHigh = r.sound_level >= 65.0;
                 const isModerate = r.sound_level >= 45.0 && r.sound_level < 65.0;
 
                 let classLabel = "Quiet / Ambient";
                 let classStyle = "bg-emerald-500/15 text-emerald-400 border-emerald-500/30";
 
-                if (isCrying) {
+                if (isEdgeCry) {
                   classLabel = "Baby Crying";
                   classStyle = "bg-rose-500/20 text-rose-400 border-rose-500/40 font-bold animate-pulse";
                 } else if (isHigh) {
