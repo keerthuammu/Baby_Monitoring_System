@@ -28,12 +28,10 @@ export default function SoundChart({ readings }) {
   const CustomTooltip = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
       const data = payload[0].payload;
-      const crestFactor = data.rms > 0 ? (data.peak / data.rms) : 0;
-      const isCrying = data.soundLevel >= 65.0 && data.rms >= 1800.0 && crestFactor >= 1.2 && crestFactor <= 3.8;
       const isHigh = data.soundLevel >= 65.0;
       const isModerate = data.soundLevel >= 45.0 && data.soundLevel < 65.0;
-      const classLabel = isCrying ? "Baby Crying" : isHigh ? "High Noise" : isModerate ? "Moderate Sound" : "Quiet / Ambient";
-      const classColor = isCrying ? "text-rose-400 font-bold" : isHigh ? "text-amber-400" : isModerate ? "text-sky-400" : "text-emerald-400";
+      const classLabel = isHigh ? "High Sound" : isModerate ? "Moderate Sound" : "Quiet / Ambient";
+      const classColor = isHigh ? "text-amber-400" : isModerate ? "text-sky-400" : "text-emerald-400";
 
       return (
         <div className="bg-slate-900/95 border border-slate-700/80 rounded-xl p-3 shadow-xl backdrop-blur-md text-xs">

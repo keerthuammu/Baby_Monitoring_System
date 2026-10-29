@@ -67,24 +67,17 @@ class MonitorService:
         detected_class = classification or reading_in.classification
         detected_conf = confidence if confidence is not None else reading_in.confidence
 
-        # 1. Pitch-based infant cry detection (350 - 680 Hz)
-        if reading_in.pitch_hz and 350.0 <= reading_in.pitch_hz <= 680.0:
+        # Infant cry detection strictly requires infant vocal fundamental pitch (300 - 680 Hz)
+        # or neural YAMNet baby cry classification.
+        if reading_in.pitch_hz and 300.0 <= reading_in.pitch_hz <= 680.0:
             detected_class = "POSSIBLE_CRYING"
             detected_conf = max(detected_conf or 0.0, 0.88)
-
-        # 2. Vocal Power & Crest Factor Baby Cry Detection
-        # Infant cries have: sound_level >= 65 dB, high vocal energy (RMS >= 1800), and harmonic crest factor (1.2 to 3.8)
-        # Impulsive noise (claps, door slams, dropping objects) has crest factor > 4.5
-        elif reading_in.rms_amplitude > 0 and reading_in.sound_level >= 65.0:
-            crest_factor = reading_in.peak_amplitude / reading_in.rms_amplitude
-            if reading_in.rms_amplitude >= 1800.0 and 1.2 <= crest_factor <= 3.8:
-                detected_class = "POSSIBLE_CRYING"
-                detected_conf = 0.88
 
         is_high_sound = reading_in.sound_level >= settings.SOUND_HIGH_THRESHOLD
         is_alert_class = detected_class in ["POSSIBLE_CRYING", "HIGH_SOUND_ACTIVITY"]
         
         if is_high_sound or is_alert_class:
+            # All other loud sounds (adult voice, TV, claps, doors, general noise) are strictly HIGH_SOUND_ACTIVITY
             event_class = detected_class or "HIGH_SOUND_ACTIVITY"
             event_conf = detected_conf if detected_conf is not None else 0.85
             MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, event_conf)

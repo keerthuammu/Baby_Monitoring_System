@@ -141,7 +141,7 @@ export default function App() {
             onAcknowledge={handleAcknowledge}
             isAcknowledging={isAcknowledging}
           />
-          <ReadingsTable readings={readings} />
+          <ReadingsTable readings={readings} events={events} />
         </div>
 
       </main>

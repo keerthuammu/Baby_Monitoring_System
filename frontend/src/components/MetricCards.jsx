@@ -112,11 +112,10 @@ export default function MetricCards({
     const evtClass = latestEvent ? latestEvent.classification : null;
     const evtConf = latestEvent?.confidence ? Math.round(latestEvent.confidence * 100) : 85;
 
-    const crestFactor = rms > 0 ? (peak / rms) : 0;
-    // Voiced infant crying: sustained vocal power (RMS >= 1800) + harmonic crest factor (1.2 to 3.8)
-    const isVoicedCryPattern = soundLevel >= 65.0 && rms >= 1800.0 && crestFactor >= 1.2 && crestFactor <= 3.8;
+    const isEdgeCry = latestReading?.classification === "POSSIBLE_CRYING" || (latestReading?.pitch_hz >= 300 && latestReading?.pitch_hz <= 680);
+    const isCryEvent = hasActiveAlert && (evtClass === "POSSIBLE_CRYING" || evtClass === "Possible Baby Crying");
 
-    if ((hasActiveAlert && (evtClass === "POSSIBLE_CRYING" || evtClass === "Possible Baby Crying")) || isVoicedCryPattern) {
+    if (isCryEvent || isEdgeCry) {
       classificationBadge = {
         label: "Possible Baby Crying",
         color: "bg-rose-500/15 text-rose-400 border-rose-500/30",

@@ -1,8 +1,9 @@
 import React from 'react';
 import { Database, Radio } from 'lucide-react';
 
-export default function ReadingsTable({ readings }) {
+export default function ReadingsTable({ readings, events }) {
   const displayedReadings = (readings || []).slice(0, 15);
+  const cryingEvents = (events || []).filter(e => e.classification === 'POSSIBLE_CRYING');
 
   return (
     <div className="glass-panel rounded-2xl p-5 transition-all">
@@ -40,9 +41,16 @@ export default function ReadingsTable({ readings }) {
             </thead>
             <tbody className="divide-y divide-slate-800/60 text-slate-300">
               {displayedReadings.map((r) => {
-                const crestFactor = r.rms_amplitude > 0 ? (r.peak_amplitude / r.rms_amplitude) : 0;
-                // Voiced infant crying: sustained vocal power (RMS >= 1800) + harmonic crest factor (1.2 to 3.8)
-                const isCrying = r.sound_level >= 65.0 && r.rms_amplitude >= 1800.0 && crestFactor >= 1.2 && crestFactor <= 3.8;
+                // Check if this packet falls within an active/recent crying event
+                const readingTime = new Date(r.recorded_at).getTime();
+                const isCryingEvent = cryingEvents.some(e => {
+                  const start = new Date(e.start_time).getTime() - 2500;
+                  const end = (e.end_time ? new Date(e.end_time).getTime() : start) + (e.duration_seconds ? e.duration_seconds * 1000 : 4000) + 3000;
+                  return readingTime >= start && readingTime <= end;
+                });
+
+                const isEdgeCry = r.classification === 'POSSIBLE_CRYING' || (r.pitch_hz >= 300 && r.pitch_hz <= 680);
+                const isCrying = isEdgeCry || (isCryingEvent && r.sound_level >= 55.0);
                 const isHigh = r.sound_level >= 65.0;
                 const isModerate = r.sound_level >= 45.0 && r.sound_level < 65.0;
 
@@ -53,7 +61,7 @@ export default function ReadingsTable({ readings }) {
                   classLabel = "Baby Crying";
                   classStyle = "bg-rose-500/20 text-rose-400 border-rose-500/40 font-bold animate-pulse";
                 } else if (isHigh) {
-                  classLabel = "High Noise";
+                  classLabel = "High Sound";
                   classStyle = "bg-amber-500/15 text-amber-400 border-amber-500/30";
                 } else if (isModerate) {
                   classLabel = "Moderate Sound";
