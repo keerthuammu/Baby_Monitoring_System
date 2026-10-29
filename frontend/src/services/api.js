@@ -63,3 +63,19 @@ export async function fetchAudioClassificationStatus() {
   return res.json();
 }
 
+export async function classifyTestAudio(wavBlob) {
+  const formData = new FormData();
+  formData.append('file', wavBlob, 'test_sample.wav');
+  formData.append('device_id', 'dashboard-web-test');
+
+  const res = await fetch(`${API_BASE_URL}/api/audio/test-classify`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Classification error ${res.status}`);
+  }
+  return res.json();
+}
+

@@ -5,6 +5,7 @@ import MetricCards from './components/MetricCards';
 import SoundChart from './components/SoundChart';
 import EventsTable from './components/EventsTable';
 import ReadingsTable from './components/ReadingsTable';
+import AudioClassifierTest from './components/AudioClassifierTest';
 import { fetchStats, fetchReadingsHistory, fetchEvents, acknowledgeEvent, fetchDevices, fetchAudioClassificationStatus, API_BASE_URL } from './services/api';
 import { AlertCircle, ShieldCheck, HeartHandshake, Laptop } from 'lucide-react';
 
@@ -130,6 +131,9 @@ export default function App() {
           latestEvent={events.length > 0 ? events[0] : null}
           audioStatus={audioStatus}
         />
+
+        {/* Live Audio & Neural Classifier Test Bench */}
+        <AudioClassifierTest onTestComplete={() => loadData(true)} />
 
         {/* Real-time Telemetry Line Chart */}
         <SoundChart readings={readings} />

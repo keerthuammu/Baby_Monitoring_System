@@ -40,11 +40,11 @@ const char* WIFI_SSID     = "Nothing Phone 3a";
 const char* WIFI_PASSWORD = "Keerthuammu29@";
 
 // Target Ingestion Endpoint (Appended with /api/readings):
-// Can be set to local Windows IP e.g. "http://192.168.55.208:8000/api/readings" or Render cloud:
-const char* BACKEND_URL        = "http://192.168.55.208:8000/api/readings";
+// Render cloud production URL:
+const char* BACKEND_URL        = "https://baby-monitor-backend-8m8o.onrender.com/api/readings";
 
-// Local Audio Classification Endpoint (Windows machine running YAMNet locally):
-const char* AUDIO_CLASSIFY_URL = "http://192.168.55.208:8000/api/audio/classify";
+// Audio Classification Endpoint (Cloud YAMNet Neural Service):
+const char* AUDIO_CLASSIFY_URL = "https://baby-monitor-backend-8m8o.onrender.com/api/audio/classify";
 
 // Security API Key (must match API_KEY in backend/.env):
 const char* API_KEY            = "baby_monitor_device_secret_key_123";

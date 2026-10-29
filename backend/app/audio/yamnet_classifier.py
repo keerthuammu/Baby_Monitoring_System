@@ -146,12 +146,15 @@ class YamnetClassifier:
         ]
 
         # Classification decision boundaries:
-        # 1. Possible Baby Crying: YAMNet AudioSet cry >= 0.35 OR physical infant cry profile
-        if (smoothed_cry_score >= 0.35 and sound_level_db >= 45.0) or (acoustic_class == "POSSIBLE_CRYING"):
+        # 1. Possible Baby Crying: YAMNet AudioSet cry >= 0.30 OR top prediction is baby cry (>= 0.20) OR physical acoustic infant cry profile
+        top_name = top_classes[0]["class_name"] if top_classes else ""
+        is_top_cry = top_name in ["Baby cry, infant cry", "Crying, sobbing"]
+
+        if ((smoothed_cry_score >= 0.30 or (is_top_cry and smoothed_cry_score >= 0.20)) and sound_level_db >= 45.0) or (acoustic_class == "POSSIBLE_CRYING"):
             code = "POSSIBLE_CRYING"
             display_label = "Possible Baby Crying"
             confidence = max(round(smoothed_cry_score, 2), round(acoustic_conf, 2))
-        elif smoothed_cry_score >= 0.15:
+        elif smoothed_cry_score >= 0.12 or is_top_cry:
             # Borderline / ambiguous crying signal
             code = "UNCERTAIN"
             display_label = "Uncertain"

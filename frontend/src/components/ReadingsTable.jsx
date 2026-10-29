@@ -41,7 +41,14 @@ export default function ReadingsTable({ readings, events }) {
             </thead>
             <tbody className="divide-y divide-slate-800/60 text-slate-300">
               {displayedReadings.map((r) => {
-                const isEdgeCry = r.classification === 'POSSIBLE_CRYING' || (r.pitch_hz >= 300 && r.pitch_hz <= 680);
+                const isEdgeCry = r.classification === 'POSSIBLE_CRYING' ||
+                  (r.pitch_hz >= 300 && r.pitch_hz <= 680) ||
+                  cryingEvents.some(e => {
+                    const rTime = new Date(r.recorded_at).getTime();
+                    const eStart = new Date(e.start_time).getTime();
+                    const eEnd = e.end_time ? new Date(e.end_time).getTime() : eStart + (e.duration_seconds * 1000 || 5000);
+                    return rTime >= eStart - 2000 && rTime <= eEnd + 2000;
+                  });
                 const isHigh = r.sound_level >= 65.0;
                 const isModerate = r.sound_level >= 45.0 && r.sound_level < 65.0;
 

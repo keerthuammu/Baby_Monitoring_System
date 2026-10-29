@@ -158,3 +158,76 @@ async def classify_audio_sample(
         "top_classes": result.get("top_classes", [])
     }
 
+@router.post("/test-classify", status_code=status.HTTP_200_OK)
+async def test_classify_audio(
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """
+    Interactive test endpoint for browser-based sound verification (microphone or file upload).
+    Directly feeds audio to Google YAMNet without requiring device API key.
+    Records reading in database so live telemetry and classification cards update immediately.
+    """
+    target_device = request.headers.get("X-Device-Id") or "dashboard-test-node"
+    content_type = request.headers.get("content-type", "")
+
+    try:
+        if "multipart/form-data" in content_type:
+            form = await request.form()
+            file = form.get("file")
+            if file is not None and hasattr(file, "read"):
+                content = await file.read()
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Missing 'file' in multipart form data"
+                )
+            if "device_id" in form and form["device_id"]:
+                target_device = str(form["device_id"])
+        else:
+            content = await request.body()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to read audio payload: {str(e)}"
+        )
+
+    classifier = YamnetClassifier.get_instance()
+    result = classifier.classify_wav_bytes(content)
+
+    if result.get("status") == "UNAVAILABLE":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=result.get("reason", "Invalid audio container")
+        )
+
+    classification = result["classification"]
+    confidence = result["confidence"]
+
+    # Record reading in database to update sound metrics
+    reading_in = ReadingCreate(
+        device_id=target_device,
+        sound_level=result["sound_level_db"],
+        rms_amplitude=result["rms_amplitude"],
+        peak_amplitude=result["peak_amplitude"]
+    )
+    MonitorService.record_reading(
+        db, 
+        reading_in, 
+        classification=classification, 
+        confidence=confidence
+    )
+
+    return {
+        "status": "success",
+        "device_id": target_device,
+        "classification": classification,
+        "display_label": result.get("display_label", classification),
+        "confidence": confidence,
+        "sound_level_db": result["sound_level_db"],
+        "top_classes": result.get("top_classes", []),
+        "crying_score_raw": result.get("crying_score_raw", 0.0)
+    }
+
