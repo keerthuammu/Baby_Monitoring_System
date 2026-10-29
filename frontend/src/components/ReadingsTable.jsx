@@ -33,6 +33,7 @@ export default function ReadingsTable({ readings }) {
                 <th className="py-2 px-3">Packet ID</th>
                 <th className="py-2 px-3">Recorded Time</th>
                 <th className="py-2 px-3">Sound Level</th>
+                <th className="py-2 px-3">Classification</th>
                 <th className="py-2 px-3">RMS Energy</th>
                 <th className="py-2 px-3">Peak Amplitude</th>
               </tr>
@@ -40,6 +41,17 @@ export default function ReadingsTable({ readings }) {
             <tbody className="divide-y divide-slate-800/60 text-slate-300">
               {displayedReadings.map((r) => {
                 const isHigh = r.sound_level >= 65;
+                const isModerate = r.sound_level >= 45 && r.sound_level < 65;
+                let classLabel = "Quiet / Ambient";
+                let classStyle = "bg-emerald-500/15 text-emerald-400 border-emerald-500/30";
+                if (isHigh) {
+                  classLabel = "High Sound";
+                  classStyle = "bg-rose-500/15 text-rose-400 border-rose-500/30";
+                } else if (isModerate) {
+                  classLabel = "Moderate Sound";
+                  classStyle = "bg-amber-500/15 text-amber-400 border-amber-500/30";
+                }
+
                 return (
                   <tr key={r.id} className="hover:bg-slate-800/30 transition">
                     <td className="py-2.5 px-3 text-slate-500">#{r.id}</td>
@@ -49,6 +61,11 @@ export default function ReadingsTable({ readings }) {
                     <td className="py-2.5 px-3">
                       <span className={`font-semibold ${isHigh ? 'text-amber-400' : 'text-emerald-400'}`}>
                         {r.sound_level.toFixed(1)} dB
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-3 font-sans">
+                      <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold border ${classStyle}`}>
+                        {classLabel}
                       </span>
                     </td>
                     <td className="py-2.5 px-3 text-slate-400">{r.rms_amplitude.toFixed(1)}</td>

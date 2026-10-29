@@ -139,8 +139,52 @@ void checkWifiConnection() {
   }
 }
 
+// Acoustic Pitch Autocorrelation Analyzer for Infant Cry Detection
+// Infant cries produce a fundamental pitch F0 between 350 Hz and 680 Hz (optimal voicing peak ~450-500 Hz)
+float detectInfantCryPitch(const int32_t* buffer, int len, float sampleRate, float* outPeriodicity) {
+  if (len < 512) {
+    if (outPeriodicity) *outPeriodicity = 0.0f;
+    return 0.0f;
+  }
+
+  int minLag = 23;
+  int maxLag = 48;
+  int testLen = (len - maxLag > 400) ? 400 : (len - maxLag);
+
+  int64_t energy0 = 0;
+  for (int i = 0; i < testLen; i++) {
+    energy0 += (int64_t)buffer[i] * (int64_t)buffer[i];
+  }
+  if (energy0 < 10000) {
+    if (outPeriodicity) *outPeriodicity = 0.0f;
+    return 0.0f;
+  }
+
+  int bestLag = 0;
+  int64_t maxCorr = 0;
+
+  for (int lag = minLag; lag <= maxLag; lag++) {
+    int64_t corr = 0;
+    for (int i = 0; i < testLen; i++) {
+      corr += (int64_t)buffer[i] * (int64_t)buffer[i + lag];
+    }
+    if (corr > maxCorr) {
+      maxCorr = corr;
+      bestLag = lag;
+    }
+  }
+
+  float periodicity = (float)maxCorr / (float)energy0;
+  if (outPeriodicity) *outPeriodicity = periodicity;
+
+  if (bestLag > 0 && periodicity >= 0.28f) {
+    return sampleRate / (float)bestLag;
+  }
+  return 0.0f;
+}
+
 // Transmit calculated features to FastAPI backend
-void sendTelemetryToBackend(float soundLevel, float rms, int peak) {
+void sendTelemetryToBackend(float soundLevel, float rms, int peak, const char* classification, float pitchHz, float confidence) {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("[HTTP] Skipped: Wi-Fi offline. Continuing local sound monitoring.");
     return;
@@ -167,21 +211,24 @@ void sendTelemetryToBackend(float soundLevel, float rms, int peak) {
   http.addHeader("User-Agent", "ESP32-BabyMonitor/1.0");
 
   // Construct JSON payload
-  char jsonBuffer[256];
+  char jsonBuffer[384];
   snprintf(
     jsonBuffer,
     sizeof(jsonBuffer),
-    "{\"device_id\":\"%s\",\"sound_level\":%.2f,\"rms_amplitude\":%.2f,\"peak_amplitude\":%d}",
+    "{\"device_id\":\"%s\",\"sound_level\":%.2f,\"rms_amplitude\":%.2f,\"peak_amplitude\":%d,\"classification\":\"%s\",\"pitch_hz\":%.1f,\"confidence\":%.2f}",
     DEVICE_ID,
     soundLevel,
     rms,
-    peak
+    peak,
+    classification,
+    pitchHz,
+    confidence
   );
 
   int httpCode = http.POST(String(jsonBuffer));
 
   if (httpCode == HTTP_CODE_CREATED || httpCode == HTTP_CODE_OK) {
-    Serial.printf("[HTTP 201] Sent -> %.1f dB | RMS: %.1f | Peak: %d\n", soundLevel, rms, peak);
+    Serial.printf("[HTTP 201] Sent -> %.1f dB | %s (%.0f%%) | Pitch: %.0f Hz | RMS: %.1f\n", soundLevel, classification, confidence * 100.0f, pitchHz, rms);
   } else if (httpCode > 0) {
     String resp = http.getString();
     Serial.printf("[HTTP ERROR %d] %s\n", httpCode, resp.c_str());
@@ -191,6 +238,10 @@ void sendTelemetryToBackend(float soundLevel, float rms, int peak) {
 
   http.end();
 }
+
+// Circular buffer for edge pitch detection
+int32_t pitchBuffer[1024];
+int pitchBufferIdx = 0;
 
 void setup() {
   Serial.begin(115200);
@@ -233,6 +284,10 @@ void loop() {
         windowPeak = abs_sample;
       }
       windowSumSquares += (double)sample * (double)sample;
+
+      if (pitchBufferIdx < 1024) {
+        pitchBuffer[pitchBufferIdx++] = sample;
+      }
     }
     windowSamplesCount += samples_read;
   }
@@ -247,23 +302,43 @@ void loop() {
       // Normalized sound level score (approximate dB SPL mapping)
       double soundLevel = 20.0 * log10(rms > 1.0 ? rms : 1.0);
 
-      // Print to Serial for local monitoring
-      Serial.printf("[SOUND] Level: %5.1f dB | RMS: %6.1f | Peak: %5d | ", soundLevel, rms, windowPeak);
-      if (soundLevel >= 65.0) {
-        Serial.println("STATUS: [HIGH SOUND ACTIVITY / CRYING]");
-      } else if (soundLevel >= 45.0) {
-        Serial.println("STATUS: [MODERATE SOUND]");
-      } else {
-        Serial.println("STATUS: [QUIET]");
+      // Edge Pitch Analysis for Infant Cry Detection (350 Hz - 680 Hz)
+      float periodicity = 0.0f;
+      float pitch = 0.0f;
+      if (soundLevel >= 50.0 && pitchBufferIdx >= 512) {
+        pitch = detectInfantCryPitch(pitchBuffer, pitchBufferIdx, SAMPLE_RATE, &periodicity);
       }
 
-      // Transmit to FastAPI backend
-      sendTelemetryToBackend(soundLevel, rms, windowPeak);
+      const char* classification = "QUIET";
+      float confidence = 0.95f;
+
+      if (pitch >= 350.0f && pitch <= 680.0f && soundLevel >= 50.0f) {
+        classification = "POSSIBLE_CRYING";
+        confidence = 0.88f;
+        Serial.printf("[ACOUSTIC MATCH] 🚨 INFANT CRY DETECTED! Pitch: %.1f Hz | Periodicity: %.2f\n", pitch, periodicity);
+      } else if (soundLevel >= 65.0f) {
+        classification = "HIGH_SOUND_ACTIVITY";
+        confidence = 0.85f;
+        Serial.printf("[ACOUSTIC MATCH] 🔊 HIGH SOUND ACTIVITY (Pitch: %.1f Hz)\n", pitch);
+      } else if (soundLevel >= 45.0f) {
+        classification = "MODERATE_SOUND";
+        confidence = 0.75f;
+      } else {
+        classification = "QUIET";
+        confidence = 0.95f;
+      }
+
+      // Print to Serial for local monitoring
+      Serial.printf("[SOUND] Level: %5.1f dB | RMS: %6.1f | Peak: %5d | STATUS: [%s]\n", soundLevel, rms, windowPeak, classification);
+
+      // Transmit to FastAPI backend with classification & pitch
+      sendTelemetryToBackend(soundLevel, rms, windowPeak, classification, pitch, confidence);
 
       // Reset window accumulators
       windowSumSquares = 0.0;
       windowPeak = 0;
       windowSamplesCount = 0;
+      pitchBufferIdx = 0;
     }
   }
 }

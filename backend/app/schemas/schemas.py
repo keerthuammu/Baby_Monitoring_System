@@ -23,6 +23,9 @@ class ReadingCreate(BaseModel):
     rms_amplitude: float = Field(..., ge=0.0, description="Root-mean-square amplitude")
     peak_amplitude: int = Field(..., ge=0, description="Maximum sample value")
     recorded_at: Optional[datetime] = Field(None, description="Client timestamp, defaults to server reception time")
+    classification: Optional[str] = Field(None, description="Edge/device classification e.g. POSSIBLE_CRYING, HIGH_SOUND_ACTIVITY")
+    pitch_hz: Optional[float] = Field(None, description="Estimated fundamental pitch in Hz")
+    confidence: Optional[float] = Field(None, ge=0.0, le=1.0, description="Confidence score 0.0 to 1.0")
 
 class ReadingResponse(BaseModel):
     id: int

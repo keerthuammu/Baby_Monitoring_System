@@ -28,6 +28,11 @@ export default function SoundChart({ readings }) {
   const CustomTooltip = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
       const data = payload[0].payload;
+      const isHigh = data.soundLevel >= 65;
+      const isModerate = data.soundLevel >= 45 && data.soundLevel < 65;
+      const classLabel = isHigh ? "High Sound Activity" : isModerate ? "Moderate Sound" : "Quiet / Ambient";
+      const classColor = isHigh ? "text-rose-400" : isModerate ? "text-amber-400" : "text-emerald-400";
+
       return (
         <div className="bg-slate-900/95 border border-slate-700/80 rounded-xl p-3 shadow-xl backdrop-blur-md text-xs">
           <p className="font-semibold text-slate-300 mb-1.5 flex items-center gap-1.5">
@@ -37,6 +42,10 @@ export default function SoundChart({ readings }) {
           <div className="space-y-1 font-mono">
             <p className="text-emerald-400 font-bold">
               Sound Level: {data.soundLevel} dB
+            </p>
+            <p className="font-sans">
+              <span className="text-slate-400">Class: </span>
+              <span className={`font-semibold ${classColor}`}>{classLabel}</span>
             </p>
             <p className="text-slate-400">
               RMS Energy: {data.rms}

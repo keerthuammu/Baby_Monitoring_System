@@ -64,13 +64,20 @@ class MonitorService:
         db.add(reading)
 
         # Acoustic Event Handling
-        # Check if reading exceeds high sound threshold or has a specific alert classification
+        # Check if reading has infant cry acoustic pitch (350 - 680 Hz) or cry classification
+        detected_class = classification or reading_in.classification
+        detected_conf = confidence if confidence is not None else reading_in.confidence
+
+        if reading_in.pitch_hz and 350.0 <= reading_in.pitch_hz <= 680.0:
+            detected_class = "POSSIBLE_CRYING"
+            detected_conf = max(detected_conf or 0.0, 0.88)
+
         is_high_sound = reading_in.sound_level >= settings.SOUND_HIGH_THRESHOLD
-        is_alert_class = classification in ["POSSIBLE_CRYING", "HIGH_SOUND_ACTIVITY"]
+        is_alert_class = detected_class in ["POSSIBLE_CRYING", "HIGH_SOUND_ACTIVITY"]
         
         if is_high_sound or is_alert_class:
-            event_class = classification or "HIGH_SOUND_ACTIVITY"
-            event_conf = confidence if confidence is not None else 0.85
+            event_class = detected_class or "HIGH_SOUND_ACTIVITY"
+            event_conf = detected_conf if detected_conf is not None else 0.85
             MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, event_conf)
 
         db.commit()
@@ -88,6 +95,7 @@ class MonitorService:
         """
         Groups continuous loud sound into an ongoing event (debouncing)
         rather than creating hundreds of duplicate event rows.
+        Upgrades event to POSSIBLE_CRYING if infant vocalization is detected.
         """
         recent_threshold = current_time - timedelta(seconds=10)
         active_event = (

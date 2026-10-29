@@ -16,9 +16,15 @@ def submit_reading(
 ):
     """
     Accepts sound-feature readings from the ESP32 IoT node.
+    Supports on-device edge classification (POSSIBLE_CRYING, HIGH_SOUND_ACTIVITY, pitch_hz).
     Requires X-API-Key header.
     """
-    reading = MonitorService.record_reading(db, reading_in)
+    reading = MonitorService.record_reading(
+        db,
+        reading_in,
+        classification=reading_in.classification,
+        confidence=reading_in.confidence
+    )
     return reading
 
 @router.get("/latest", response_model=Optional[ReadingResponse])

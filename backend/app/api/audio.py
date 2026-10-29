@@ -1,26 +1,86 @@
 import io
 import wave
+from datetime import datetime, timezone
 import numpy as np
 from typing import Optional
 from fastapi import APIRouter, Depends, UploadFile, File, Form, Request, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy import desc
 from app.core.database import get_db
 from app.core.security import verify_device_api_key
 from app.audio.yamnet_classifier import YamnetClassifier
-from app.services.monitor_service import MonitorService
+from app.services.monitor_service import MonitorService, to_utc
+from app.models.models import CryingEvent
 from app.schemas.schemas import ReadingCreate
 
 router = APIRouter(prefix="/api/audio", tags=["Audio Classification"])
 
 @router.get("/status", status_code=status.HTTP_200_OK)
-def get_audio_classification_status():
+def get_audio_classification_status(db: Session = Depends(get_db)):
     """
     Returns the real-time audio sound classification and confidence.
-    Enforces a freshness guard: if no audio is ingested within 6 seconds,
-    automatically marks status as 'Microphone or connection unavailable'.
+    1. Returns YAMNet neural classification if live raw audio is streamed.
+    2. Gracefully falls back to real-time acoustic telemetry classification
+       (dB, RMS, active events) if the IoT device is online.
+    3. Returns unavailable/offline if no telemetry or audio is active.
     """
     classifier = YamnetClassifier.get_instance()
-    return classifier.get_current_status(staleness_seconds=10.0)
+    status_data = classifier.get_current_status(staleness_seconds=10.0)
+
+    # If raw neural audio classification is fresh, return it
+    if status_data.get("is_fresh"):
+        status_data["engine"] = "Local YAMNet"
+        return status_data
+
+    # Telemetry-based Acoustic Classifier fallback
+    devices = MonitorService.get_devices(db)
+    is_online = any(d.connection_status == "ONLINE" for d in devices)
+    latest_reading = MonitorService.get_latest_reading(db)
+    latest_event = db.query(CryingEvent).order_by(desc(CryingEvent.start_time)).first()
+
+    if is_online and latest_reading:
+        now = datetime.now(timezone.utc)
+        reading_time = to_utc(latest_reading.recorded_at) or now
+        time_diff = (now - reading_time).total_seconds()
+
+        # Reading within reasonable window (e.g. 15s)
+        if time_diff <= 15.0:
+            has_active_event = (
+                latest_event is not None and (
+                    not latest_event.acknowledged or 
+                    (now - to_utc(latest_event.end_time or latest_event.start_time)).total_seconds() < 15.0
+                )
+            )
+
+            if has_active_event and latest_event.classification == "POSSIBLE_CRYING":
+                classification = "Possible Baby Crying"
+                confidence = round(latest_event.confidence or 0.85, 2)
+            elif has_active_event or latest_reading.sound_level >= 65.0:
+                classification = "High Sound Activity"
+                confidence = round(latest_event.confidence if has_active_event else 0.85, 2)
+            elif latest_reading.sound_level >= 45.0:
+                classification = "Moderate Sound"
+                confidence = 0.75
+            else:
+                classification = "Quiet / Ambient"
+                confidence = 0.95
+
+            return {
+                "classification": classification,
+                "confidence": confidence,
+                "status": "ACTIVE",
+                "is_fresh": True,
+                "engine": "Acoustic Classifier",
+                "source": "telemetry",
+                "seconds_since_update": round(time_diff, 1),
+                "last_update": reading_time.isoformat(),
+                "sound_level_db": latest_reading.sound_level,
+                "top_classes": [
+                    {"class_name": classification, "score": confidence}
+                ]
+            }
+
+    return status_data
 
 @router.post("/classify", status_code=status.HTTP_200_OK)
 async def classify_audio_sample(
