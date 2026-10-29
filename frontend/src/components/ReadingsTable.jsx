@@ -40,16 +40,24 @@ export default function ReadingsTable({ readings }) {
             </thead>
             <tbody className="divide-y divide-slate-800/60 text-slate-300">
               {displayedReadings.map((r) => {
-                const isHigh = r.sound_level >= 65;
-                const isModerate = r.sound_level >= 45 && r.sound_level < 65;
+                const crestFactor = r.rms_amplitude > 0 ? (r.peak_amplitude / r.rms_amplitude) : 0;
+                // Voiced infant crying: sustained vocal power (RMS >= 1800) + harmonic crest factor (1.2 to 3.8)
+                const isCrying = r.sound_level >= 65.0 && r.rms_amplitude >= 1800.0 && crestFactor >= 1.2 && crestFactor <= 3.8;
+                const isHigh = r.sound_level >= 65.0;
+                const isModerate = r.sound_level >= 45.0 && r.sound_level < 65.0;
+
                 let classLabel = "Quiet / Ambient";
                 let classStyle = "bg-emerald-500/15 text-emerald-400 border-emerald-500/30";
-                if (isHigh) {
-                  classLabel = "High Sound";
-                  classStyle = "bg-rose-500/15 text-rose-400 border-rose-500/30";
+
+                if (isCrying) {
+                  classLabel = "Baby Crying";
+                  classStyle = "bg-rose-500/20 text-rose-400 border-rose-500/40 font-bold animate-pulse";
+                } else if (isHigh) {
+                  classLabel = "High Noise";
+                  classStyle = "bg-amber-500/15 text-amber-400 border-amber-500/30";
                 } else if (isModerate) {
                   classLabel = "Moderate Sound";
-                  classStyle = "bg-amber-500/15 text-amber-400 border-amber-500/30";
+                  classStyle = "bg-sky-500/15 text-sky-400 border-sky-500/30";
                 }
 
                 return (

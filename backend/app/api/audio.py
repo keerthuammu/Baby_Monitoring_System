@@ -52,9 +52,12 @@ def get_audio_classification_status(db: Session = Depends(get_db)):
                 )
             )
 
-            if has_active_event and latest_event.classification == "POSSIBLE_CRYING":
+            crest_factor = (latest_reading.peak_amplitude / latest_reading.rms_amplitude) if latest_reading.rms_amplitude > 0 else 0
+            is_voiced_cry = latest_reading.sound_level >= 65.0 and latest_reading.rms_amplitude >= 1800.0 and (1.2 <= crest_factor <= 3.8)
+
+            if (has_active_event and latest_event.classification == "POSSIBLE_CRYING") or is_voiced_cry:
                 classification = "Possible Baby Crying"
-                confidence = round(latest_event.confidence or 0.85, 2)
+                confidence = round(latest_event.confidence if (has_active_event and latest_event.classification == "POSSIBLE_CRYING") else 0.88, 2)
             elif has_active_event or latest_reading.sound_level >= 65.0:
                 classification = "High Sound Activity"
                 confidence = round(latest_event.confidence if has_active_event else 0.85, 2)

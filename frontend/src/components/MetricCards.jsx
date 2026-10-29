@@ -112,12 +112,16 @@ export default function MetricCards({
     const evtClass = latestEvent ? latestEvent.classification : null;
     const evtConf = latestEvent?.confidence ? Math.round(latestEvent.confidence * 100) : 85;
 
-    if (hasActiveAlert && (evtClass === "POSSIBLE_CRYING" || evtClass === "Possible Baby Crying")) {
+    const crestFactor = rms > 0 ? (peak / rms) : 0;
+    // Voiced infant crying: sustained vocal power (RMS >= 1800) + harmonic crest factor (1.2 to 3.8)
+    const isVoicedCryPattern = soundLevel >= 65.0 && rms >= 1800.0 && crestFactor >= 1.2 && crestFactor <= 3.8;
+
+    if ((hasActiveAlert && (evtClass === "POSSIBLE_CRYING" || evtClass === "Possible Baby Crying")) || isVoicedCryPattern) {
       classificationBadge = {
         label: "Possible Baby Crying",
         color: "bg-rose-500/15 text-rose-400 border-rose-500/30",
         dotColor: "bg-rose-500",
-        confidence: `${evtConf}%`,
+        confidence: hasActiveAlert && evtConf ? `${evtConf}%` : "88%",
         desc: "Acoustic signature matches infant cry pattern",
         isLive: true,
         engine: "Acoustic Classifier (Active)"
