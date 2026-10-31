@@ -3,40 +3,58 @@ import { Mic, MicOff, Volume2, ShieldAlert, CheckCircle2, AlertCircle } from 'lu
 import { classifyTestAudio } from '../services/api';
 
 /**
- * Autocorrelation algorithm to estimate fundamental pitch F0 (85 Hz - 800 Hz)
+ * First-harmonic peak picking autocorrelation pitch detector (80 Hz - 850 Hz).
+ * Prevents sub-harmonic octave halving error (e.g., 450 Hz detected as 225 Hz).
  */
-function detectPitch(buffer, sampleRate) {
-  const minFreq = 85;
-  const maxFreq = 800;
-  const minLag = Math.floor(sampleRate / maxFreq);
-  const maxLag = Math.floor(sampleRate / minFreq);
+function detectPitch(buffer, sampleRate = 16000) {
+  const minLag = Math.floor(sampleRate / 850); // ~18 samples (850 Hz)
+  const maxLag = Math.floor(sampleRate / 80);  // ~200 samples (80 Hz)
 
-  let bestLag = -1;
-  let bestCorrelation = 0;
   let energy = 0;
-
   for (let i = 0; i < buffer.length; i++) {
     energy += buffer[i] * buffer[i];
   }
 
-  if (energy < 0.01) return { pitch: 0, periodicity: 0 };
+  if (energy < 0.005) return { pitch: 0, periodicity: 0 };
 
+  const normCorr = new Float32Array(maxLag + 1);
   for (let lag = minLag; lag <= maxLag; lag++) {
     let sum = 0;
     for (let i = 0; i < buffer.length - lag; i++) {
       sum += buffer[i] * buffer[i + lag];
     }
-    const normCorr = sum / energy;
-    if (normCorr > bestCorrelation) {
-      bestCorrelation = normCorr;
-      bestLag = lag;
+    normCorr[lag] = sum / energy;
+  }
+
+  // Find all local maxima in [minLag, maxLag]
+  const peaks = [];
+  for (let lag = minLag + 1; lag < maxLag; lag++) {
+    if (normCorr[lag] > normCorr[lag - 1] && normCorr[lag] >= normCorr[lag + 1]) {
+      peaks.push({ lag, val: normCorr[lag] });
     }
   }
 
-  if (bestCorrelation >= 0.35 && bestLag > 0) {
-    return { pitch: sampleRate / bestLag, periodicity: bestCorrelation };
+  if (peaks.length === 0) return { pitch: 0, periodicity: 0 };
+
+  let globalMax = 0;
+  for (let i = 0; i < peaks.length; i++) {
+    if (peaks[i].val > globalMax) globalMax = peaks[i].val;
   }
-  return { pitch: 0, periodicity: bestCorrelation };
+
+  if (globalMax < 0.22) return { pitch: 0, periodicity: globalMax };
+
+  // First local maximum that reaches at least 70% of globalMax is the fundamental F0
+  const threshold = Math.max(0.22, globalMax * 0.70);
+  let fundamentalLag = peaks[0].lag;
+  for (let i = 0; i < peaks.length; i++) {
+    if (peaks[i].val >= threshold) {
+      fundamentalLag = peaks[i].lag;
+      break;
+    }
+  }
+
+  const pitch = sampleRate / fundamentalLag;
+  return { pitch, periodicity: globalMax };
 }
 
 /**
@@ -195,28 +213,28 @@ export default function LiveMicClassifier({ onTestComplete }) {
       const rms = Math.sqrt(sumSq / merged.length);
       const db = Math.round(20 * Math.log10(Math.max(rms, 1e-4) * 32768));
 
-      // 2. Client-side pitch detection
+      // 2. Client-side pitch detection with calibrated bounds
       const { pitch, periodicity } = detectPitch(merged, sampleRate);
-      const isInfantPitch = pitch >= 300 && pitch <= 680 && periodicity >= 0.35;
+      const isInfantPitch = pitch >= 300 && pitch <= 720 && periodicity >= 0.22;
 
       let isBaby = false;
       let label = "NOT BABY SOUND";
       let details = "Normal Ambient Sound";
       let confidence = 85;
 
-      if (db < 45) {
+      if (db < 38) {
         label = "QUIET / AMBIENT";
         details = "Room is quiet";
         confidence = 95;
-      } else if (isInfantPitch && db >= 55) {
+      } else if (isInfantPitch && db >= 40) {
         isBaby = true;
         label = "BABY SOUND DETECTED";
         details = `Infant crying pitch detected (${Math.round(pitch)} Hz)`;
-        confidence = 90;
+        confidence = 92;
       } else {
         isBaby = false;
         label = "NOT BABY SOUND";
-        details = pitch > 0 ? `Adult voice / noise (${Math.round(pitch)} Hz)` : "Loud noise / not baby cry";
+        details = pitch > 0 ? `Adult voice / noise (${Math.round(pitch)} Hz)` : "Room noise / not baby cry";
         confidence = 85;
       }
 
@@ -238,21 +256,24 @@ export default function LiveMicClassifier({ onTestComplete }) {
 
         const serverIsBaby = serverResult?.classification === "POSSIBLE_CRYING";
         const topClass = serverResult?.top_classes?.[0]?.class_name || "";
+        const finalIsBaby = serverIsBaby || isBaby;
 
-        setSoundClassification((prev) => ({
-          ...prev,
-          isBaby: serverIsBaby || (prev ? prev.isBaby : false),
-          label: serverIsBaby ? "BABY SOUND DETECTED" : "NOT BABY SOUND",
-          details: serverIsBaby
-            ? "Google YAMNet verified: Infant Crying"
+        setSoundClassification({
+          isBaby: finalIsBaby,
+          label: finalIsBaby ? "BABY SOUND DETECTED" : (db < 38 ? "QUIET / AMBIENT" : "NOT BABY SOUND"),
+          details: finalIsBaby
+            ? (serverIsBaby ? `Google YAMNet: ${topClass || "Infant Cry"}` : `Infant crying pitch detected (${Math.round(pitch)} Hz)`)
             : `Classified as: ${topClass || "Non-baby sound"}`,
-          confidence: Math.round((serverResult?.confidence || 0.85) * 100),
+          soundLevel: db,
+          pitch: Math.round(pitch),
+          confidence: Math.round((serverResult?.confidence || (confidence / 100)) * 100),
           yamnetClass: topClass,
-        }));
+          timestamp: new Date().toLocaleTimeString(),
+        });
 
         if (onTestComplete) onTestComplete();
       } catch (backendErr) {
-        // Fallback to local pitch detection if network is slow
+        // Local pitch detection continues with zero interruption
         console.warn("Backend classification fallback:", backendErr);
       }
     } catch (err) {

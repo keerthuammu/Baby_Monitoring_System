@@ -180,26 +180,43 @@ float detectInfantCryPitch(const int16_t* buffer, int len, float sampleRate, flo
     return 0.0f; // Silence / ambient
   }
 
-  int bestLag = 0;
-  int64_t maxCorr = 0;
+  // Search for autocorrelation peaks across lag window
+  int64_t corrValues[192];
+  int64_t globalMaxCorr = 0;
 
   for (int lag = minLag; lag <= maxLag; lag++) {
     int64_t corr = 0;
     for (int i = 0; i < testLen; i++) {
       corr += (int32_t)buffer[i] * (int32_t)buffer[i + lag];
     }
-    if (corr > maxCorr) {
-      maxCorr = corr;
-      bestLag = lag;
+    corrValues[lag] = corr;
+    if (corr > globalMaxCorr) {
+      globalMaxCorr = corr;
     }
   }
 
-  float periodicity = (float)maxCorr / (float)energy0;
+  float periodicity = (float)globalMaxCorr / (float)energy0;
   if (outPeriodicity) *outPeriodicity = periodicity;
 
-  // Voiced periodicity threshold (must have clean harmonic peak >= 0.38)
-  if (bestLag > 0 && periodicity >= 0.38f) {
-    return sampleRate / (float)bestLag;
+  if (periodicity < 0.25f || globalMaxCorr <= 0) {
+    return 0.0f;
+  }
+
+  // First local maximum that reaches 70% of globalMaxCorr avoids harmonic octave halving
+  int64_t threshold = (int64_t)(globalMaxCorr * 0.70f);
+  int fundamentalLag = 0;
+
+  for (int lag = minLag + 1; lag < maxLag; lag++) {
+    if (corrValues[lag] > corrValues[lag - 1] && corrValues[lag] >= corrValues[lag + 1]) {
+      if (corrValues[lag] >= threshold) {
+        fundamentalLag = lag;
+        break;
+      }
+    }
+  }
+
+  if (fundamentalLag > 0) {
+    return sampleRate / (float)fundamentalLag;
   }
   return 0.0f;
 }

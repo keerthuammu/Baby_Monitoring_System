@@ -27,9 +27,10 @@ def compute_zcr(signal: np.ndarray) -> float:
 
 def estimate_pitch_autocorr(signal: np.ndarray, sample_rate: int = 16000) -> Tuple[float, float]:
     """
-    Estimates fundamental frequency (F0) using normalized autocorrelation.
-    Infant cries typically have fundamental pitch F0 in the 350 Hz to 650 Hz range
-    (much higher than typical adult speech: 85-255 Hz).
+    Estimates fundamental frequency (F0) using normalized autocorrelation with
+    first-harmonic peak picking to prevent sub-harmonic octave halving.
+    Infant cries have fundamental pitch F0 in the 300 Hz to 700 Hz range
+    (distinct from adult speech: 85-255 Hz).
     
     Returns:
         (pitch_hz, periodicity_strength)
@@ -37,11 +38,11 @@ def estimate_pitch_autocorr(signal: np.ndarray, sample_rate: int = 16000) -> Tup
     if len(signal) < 256:
         return 0.0, 0.0
 
-    # Subtract mean
+    # Subtract DC bias
     sig = signal.astype(float) - np.mean(signal)
     
-    # Lag bounds for human pitch (80 Hz to 900 Hz)
-    min_lag = int(sample_rate / 900)  # ~17 samples at 16kHz
+    # Lag bounds for human pitch (80 Hz to 850 Hz)
+    min_lag = int(sample_rate / 850)  # ~18 samples at 16kHz
     max_lag = int(sample_rate / 80)   # ~200 samples at 16kHz
     
     if max_lag >= len(sig):
@@ -49,27 +50,40 @@ def estimate_pitch_autocorr(signal: np.ndarray, sample_rate: int = 16000) -> Tup
 
     # Autocorrelation
     corr = np.correlate(sig, sig, mode='full')
-    corr = corr[len(sig)-1:] # Keep non-negative lags
+    corr = corr[len(sig)-1:]
     
-    if corr[0] == 0:
+    if corr[0] <= 0:
         return 0.0, 0.0
         
     norm_corr = corr / corr[0]
     
-    # Search within human pitch lag window
-    search_window = norm_corr[min_lag:max_lag]
-    if len(search_window) == 0:
+    # Find all local maxima in the search window
+    peaks = []
+    for lag in range(min_lag + 1, min(max_lag, len(norm_corr) - 1)):
+        if norm_corr[lag] > norm_corr[lag - 1] and norm_corr[lag] >= norm_corr[lag + 1]:
+            peaks.append((lag, float(norm_corr[lag])))
+            
+    if not peaks:
         return 0.0, 0.0
         
-    peak_idx = np.argmax(search_window)
-    peak_val = search_window[peak_idx]
-    
-    lag = min_lag + peak_idx
-    if lag == 0:
-        return 0.0, 0.0
+    global_max = max(p[1] for p in peaks)
+    if global_max < 0.25:
+        return 0.0, float(global_max)
         
-    pitch_hz = sample_rate / lag
-    periodicity = float(np.clip(peak_val, 0.0, 1.0))
+    # The fundamental pitch corresponds to the earliest local maximum whose
+    # peak value is at least 70% of the global correlation maximum
+    threshold = max(0.25, global_max * 0.70)
+    fundamental_lag = None
+    for lag, val in peaks:
+        if val >= threshold:
+            fundamental_lag = lag
+            break
+            
+    if fundamental_lag is None:
+        fundamental_lag = peaks[0][0]
+        
+    pitch_hz = sample_rate / fundamental_lag
+    periodicity = float(np.clip(global_max, 0.0, 1.0))
     
     return float(pitch_hz), periodicity
 

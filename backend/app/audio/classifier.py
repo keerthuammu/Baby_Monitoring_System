@@ -24,10 +24,10 @@ class AcousticClassifier:
     """
 
     # Empirical infant cry acoustic parameters:
-    CRY_PITCH_MIN_HZ = 350.0
-    CRY_PITCH_MAX_HZ = 680.0
-    CRY_BAND_ENERGY_MIN = 0.40
-    CRY_DECIBEL_MIN = 55.0
+    CRY_PITCH_MIN_HZ = 300.0
+    CRY_PITCH_MAX_HZ = 720.0
+    CRY_BAND_ENERGY_MIN = 0.35
+    CRY_DECIBEL_MIN = 42.0
 
     @classmethod
     def classify_waveform(cls, signal: np.ndarray, sample_rate: int = 16000) -> Dict[str, Any]:
@@ -55,40 +55,35 @@ class AcousticClassifier:
         cry_band_ratio = features.get("cry_band_ratio", 0.0)
 
         # 1. Quiet Condition
-        if db < 45.0:
-            confidence = max(0.60, min(0.99, (45.0 - db) / 45.0 + 0.60))
+        if db < 38.0:
+            confidence = max(0.60, min(0.99, (38.0 - db) / 38.0 + 0.60))
             return "QUIET", round(confidence, 2)
 
         # 2. Check for Infant Cry Characteristics
         # Infant cries have:
-        # a) Fundamental pitch (F0) typically in 350 - 680 Hz range
-        # b) Sustained periodicity (voiced vocalization)
+        # a) Fundamental pitch (F0) in 300 - 720 Hz range
+        # b) Sustained periodicity (vocal chord vibration >= 0.25)
         # c) Majority of acoustic energy in the 350 Hz - 2500 Hz band
-        # d) Elevated sound level >= 55 dB
+        # d) Elevated sound level >= 42 dB
         is_pitch_match = (cls.CRY_PITCH_MIN_HZ <= pitch <= cls.CRY_PITCH_MAX_HZ)
-        is_periodic = (periodicity >= 0.30)
+        is_periodic = (periodicity >= 0.25)
         is_spectral_match = (cry_band_ratio >= cls.CRY_BAND_ENERGY_MIN)
         is_elevated_db = (db >= cls.CRY_DECIBEL_MIN)
 
-        if is_pitch_match and is_periodic and is_spectral_match and is_elevated_db:
+        if is_pitch_match and is_periodic and is_elevated_db:
             # High alignment with infant cry acoustic profile
-            # Confidence weighted by pitch centrality (optimal center ~480 Hz) and band energy
             pitch_score = 1.0 - abs(pitch - 480.0) / 250.0
             spectral_score = cry_band_ratio
-            confidence = float(np.clip(0.55 + 0.25 * pitch_score + 0.20 * spectral_score, 0.65, 0.95))
+            confidence = float(np.clip(0.60 + 0.25 * pitch_score + 0.15 * spectral_score, 0.70, 0.96))
             return "POSSIBLE_CRYING", round(confidence, 2)
 
-        # 3. High Sound Activity (Elevated noise, but NOT matching cry pitch/spectrum)
-        if db >= 65.0:
-            # It is loud, but pitch is adult speech, bass rumble, or abrupt broadband noise
-            confidence = 0.85
+        # 3. High Sound Activity (Adult speech, clapping, TV, doors)
+        if db >= 60.0 or (db >= 42.0 and (pitch < 280.0 or not is_pitch_match)):
+            confidence = 0.88 if 85.0 <= pitch <= 260.0 else 0.80
             return "HIGH_SOUND_ACTIVITY", round(confidence, 2)
 
-        # 4. Moderate sound or uncertain classification
-        if db >= 45.0:
-            if is_pitch_match and is_periodic:
-                # Borderline pitch match at lower volume
-                return "UNCERTAIN", 0.50
-            return "HIGH_SOUND_ACTIVITY", 0.60
+        # 4. Moderate sound or quiet baseline
+        if db >= 38.0:
+            return "QUIET", 0.85
 
         return "UNCERTAIN", 0.40

@@ -25,53 +25,26 @@ def load_class_names():
             class_names.append(row[2])
     return class_names
 
-def run_inference(session, class_names, waveform: np.ndarray, sample_rate: int = 16000):
-    # Ensure float32 1D array normalized [-1.0, 1.0]
-    wav = waveform.astype(np.float32)
-    if np.max(np.abs(wav)) > 1.0:
-        wav = wav / np.max(np.abs(wav))
-
-    input_name = session.get_inputs()[0].name
-    outputs = session.run(None, {input_name: wav})
-    scores = outputs[0]  # Shape: [num_frames, 521]
-
-    # Mean score across frames
-    mean_scores = np.mean(scores, axis=0)
-
-    # Class 19: Crying, sobbing
-    # Class 20: Baby cry, infant cry
-    # Class 11: Screaming
-    crying_score = float(max(mean_scores[19], mean_scores[20]))
-    
-    top_indices = np.argsort(mean_scores)[::-1][:5]
-    top_predictions = [(class_names[idx], float(mean_scores[idx])) for idx in top_indices]
-
-    # Classification logic with confidence & uncertain state
-    if crying_score >= 0.40:
-        classification = "Possible Baby Crying"
-        confidence = crying_score
-    elif crying_score >= 0.20:
-        classification = "Uncertain"
-        confidence = crying_score
-    else:
-        classification = "Other Sound"
-        confidence = float(mean_scores[top_indices[0]])
-
+def run_inference(classifier, waveform: np.ndarray, sample_rate: int = 16000):
+    res = classifier.classify_waveform(waveform, sample_rate)
     return {
-        "classification": classification,
-        "crying_confidence": round(crying_score, 4),
-        "primary_label": classification,
-        "top_predictions": top_predictions
+        "classification": res.get("display_label", res.get("classification")),
+        "cry_code": res.get("classification"),
+        "confidence": res.get("confidence", 0.0),
+        "sound_level_db": res.get("sound_level_db", 0.0),
+        "top_predictions": [(c["class_name"], c["score"]) for c in res.get("top_classes", [])]
     }
 
 def main():
+    import sys
+    sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
+    from app.audio.yamnet_classifier import YamnetClassifier
+
     print("=" * 60)
-    print("PHASE 3: LOCAL YAMNET ONNX MODEL EVALUATION")
+    print("PHASE 3: LOCAL YAMNET ONNX & ACOUSTIC EVALUATION")
     print("=" * 60)
-    print(f"Loading ONNX Model from: {MODEL_PATH}")
-    session = ort.InferenceSession(MODEL_PATH)
-    class_names = load_class_names()
-    print(f"Loaded {len(class_names)} AudioSet class definitions.\n")
+    classifier = YamnetClassifier.get_instance()
+    print("Loaded YamnetClassifier pipeline.\n")
 
     sample_rate = 16000
     duration = 1.0  # 1 second test clips
@@ -104,17 +77,16 @@ def main():
         0.35 * np.sin(3 * phase) +
         0.2 * np.sin(4 * phase)
     )
-    # Add vocal tract resonance envelope
     envelope = (np.sin(2 * np.pi * 1.5 * t) ** 2)
     cry = cry * envelope
     test_cases.append(("Infant Cry Acoustic Simulation", cry.astype(np.float32)))
 
-    print("Evaluating test sounds through YAMNet:\n")
+    print("Evaluating test sounds through pipeline:\n")
     for name, signal in test_cases:
-        res = run_inference(session, class_names, signal, sample_rate)
+        res = run_inference(classifier, signal, sample_rate)
         print(f"[*] Test Sound: {name}")
-        print(f"    -> Classification: {res['classification']}")
-        print(f"    -> Cry Confidence: {res['crying_confidence'] * 100:.1f}%")
+        print(f"    -> Classification: {res['classification']} (Code: {res['cry_code']})")
+        print(f"    -> Confidence: {res['confidence'] * 100:.1f}% | dB: {res['sound_level_db']}")
         print(f"    -> Top 3 Predictions: {', '.join([f'{c} ({s*100:.1f}%)' for c, s in res['top_predictions'][:3]])}")
         print("-" * 60)
 

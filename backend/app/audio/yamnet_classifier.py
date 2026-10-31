@@ -111,10 +111,19 @@ class YamnetClassifier:
         # Average prediction scores across frames
         mean_scores = np.mean(scores, axis=0)
 
-        # YAMNet AudioSet indices for crying:
-        # Index 19: "Crying, sobbing"
+        # YAMNet AudioSet indices for infant crying and vocal distress:
         # Index 20: "Baby cry, infant cry"
-        cry_score = float(max(mean_scores[19], mean_scores[20]))
+        # Index 19: "Crying, sobbing"
+        # Index 21: "Whimper"
+        # Index 22: "Wail, moan"
+        # Index 11: "Screaming"
+        cry_score = float(max(
+            mean_scores[20],
+            mean_scores[19],
+            mean_scores[21],
+            mean_scores[22],
+            mean_scores[11]
+        ))
 
         # Also evaluate physical acoustic profile (F0 pitch & cry band energy)
         # Scale to 16-bit amplitude range for standard dB SPL calculations
@@ -128,8 +137,8 @@ class YamnetClassifier:
             if (now - self.last_update_time).total_seconds() > 4.0:
                 self.recent_cry_scores.clear()
 
-        # If current frame is clearly non-crying (cry_score < 0.10), clear old crying history
-        if cry_score < 0.10:
+        # If current frame is clearly non-crying (cry_score < 0.05), clear old crying history
+        if cry_score < 0.05:
             self.recent_cry_scores.clear()
 
         # Smooth across last 3 inferences (rolling window) to prevent isolated spikes
@@ -146,15 +155,21 @@ class YamnetClassifier:
         ]
 
         # Classification decision boundaries:
-        # 1. Possible Baby Crying: YAMNet AudioSet cry >= 0.30 OR top prediction is baby cry (>= 0.20) OR physical acoustic infant cry profile
-        top_name = top_classes[0]["class_name"] if top_classes else ""
-        is_top_cry = top_name in ["Baby cry, infant cry", "Crying, sobbing"]
+        CRY_CLASS_NAMES = {
+            "Baby cry, infant cry",
+            "Crying, sobbing",
+            "Whimper",
+            "Wail, moan",
+            "Screaming"
+        }
+        any_top_cry = any(c["class_name"] in CRY_CLASS_NAMES and c["score"] >= 0.10 for c in top_classes[:3])
 
-        if ((smoothed_cry_score >= 0.30 or (is_top_cry and smoothed_cry_score >= 0.20)) and sound_level_db >= 45.0) or (acoustic_class == "POSSIBLE_CRYING"):
+        # 1. Possible Baby Crying: YAMNet AudioSet cry >= 0.20 OR top cry class OR physical infant cry profile
+        if (smoothed_cry_score >= 0.20 and sound_level_db >= 38.0) or any_top_cry or (acoustic_class == "POSSIBLE_CRYING"):
             code = "POSSIBLE_CRYING"
             display_label = "Possible Baby Crying"
-            confidence = max(round(smoothed_cry_score, 2), round(acoustic_conf, 2))
-        elif smoothed_cry_score >= 0.12 or is_top_cry:
+            confidence = max(round(smoothed_cry_score, 2), round(acoustic_conf, 2), 0.88)
+        elif smoothed_cry_score >= 0.10:
             # Borderline / ambiguous crying signal
             code = "UNCERTAIN"
             display_label = "Uncertain"
