@@ -39,12 +39,13 @@
 const char* WIFI_SSID     = "Nothing Phone 3a";
 const char* WIFI_PASSWORD = "Keerthuammu29@";
 
-// Target Ingestion Endpoint (Appended with /api/readings):
-// Render cloud production URL:
-const char* BACKEND_URL        = "https://baby-monitor-backend-8m8o.onrender.com/api/readings";
+// Target Ingestion Endpoint (Local Wi-Fi FastAPI Backend):
+// Replace 10.231.194.178 with your PC's Wi-Fi IPv4 if it changes:
+const char* LOCAL_BACKEND_HOST = "10.231.194.178:8000";
+const char* BACKEND_URL        = "http://10.231.194.178:8000/api/readings";
 
-// Audio Classification Endpoint (Cloud YAMNet Neural Service):
-const char* AUDIO_CLASSIFY_URL = "https://baby-monitor-backend-8m8o.onrender.com/api/audio/classify";
+// Audio Classification Endpoint (Local YAMNet ONNX Classification Service):
+const char* AUDIO_CLASSIFY_URL = "http://10.231.194.178:8000/api/audio/classify";
 
 // Security API Key (must match API_KEY in backend/.env):
 const char* API_KEY            = "baby_monitor_device_secret_key_123";
@@ -387,30 +388,40 @@ void loop() {
         pitch = detectInfantCryPitch(audioBuffer, audioBufferIdx, SAMPLE_RATE, &periodicity);
       }
 
-      const char* classification = "QUIET";
-      float confidence = 0.95f;
-
-      if (pitch >= 350.0f && pitch <= 680.0f && soundLevel >= 50.0f) {
-        // High harmonic pitch + voiced periodicity matches infant crying
-        classification = "POSSIBLE_CRYING";
-        confidence = 0.88f;
-        Serial.printf("[ACOUSTIC MATCH] 🚨 INFANT CRY DETECTED! Pitch: %.1f Hz | Periodicity: %.2f\n", pitch, periodicity);
-      } else if (soundLevel >= 65.0f) {
-        classification = "HIGH_SOUND_ACTIVITY";
-        confidence = 0.85f;
-        Serial.printf("[ACOUSTIC MATCH] 🔊 HIGH SOUND ACTIVITY (Pitch: %.1f Hz)\n", pitch);
+      // Feature A: Sound Intensity (Volume level)
+      const char* intensity = "LOW SOUND";
+      if (soundLevel >= 65.0f) {
+        intensity = "HIGH SOUND";
       } else if (soundLevel >= 45.0f) {
-        classification = "MODERATE_SOUND";
-        confidence = 0.75f;
-      } else {
-        classification = "QUIET";
-        confidence = 0.95f;
+        intensity = "MODERATE SOUND";
       }
 
-      // Print to Serial for local monitoring
-      Serial.printf("[SOUND] Level: %5.1f dB | RMS: %6.1f | Peak: %5d | STATUS: [%s]\n", soundLevel, rms, windowPeak, classification);
+      // Feature B: Baby Sound Status (Acoustic Pitch & Model Verification)
+      const char* babyStatus = "NOT BABY CRYING";
+      const char* classification = "HIGH_SOUND_ACTIVITY";
+      float confidence = 0.85f;
 
-      // Transmit to FastAPI backend with classification & pitch
+      if (pitch >= 350.0f && pitch <= 680.0f && periodicity >= 0.35f && soundLevel >= 50.0f) {
+        babyStatus = "🚨 BABY CRYING DETECTED";
+        classification = "POSSIBLE_CRYING";
+        confidence = 0.90f;
+        Serial.printf("\n[ACOUSTIC ALERT] 🚨 INFANT CRY FREQUENCY DETECTED! Pitch: %.1f Hz | Periodicity: %.2f\n", pitch, periodicity);
+      } else if (soundLevel < 45.0f) {
+        classification = "QUIET";
+        babyStatus = "NOT BABY CRYING";
+        confidence = 0.95f;
+      } else {
+        // High or Moderate non-crying sound (adult speech, clapping, doors, TV)
+        classification = (soundLevel >= 65.0f) ? "HIGH_SOUND_ACTIVITY" : "MODERATE_SOUND";
+        babyStatus = "NOT BABY CRYING";
+        confidence = 0.85f;
+      }
+
+      // Explicit Serial Monitor output: Clearly separates Volume from Baby Status
+      Serial.printf("[SOUND] Level: %5.1f dB | Intensity: [%s] | Baby Classification: [%s] | Pitch: %.0f Hz\n",
+                    soundLevel, intensity, babyStatus, pitch);
+
+      // Transmit telemetry to FastAPI backend
       sendTelemetryToBackend(soundLevel, rms, windowPeak, classification, pitch, confidence);
 
       // Reset window accumulators

@@ -13,7 +13,7 @@ export default function MetricCards({
   const rms = latestReading ? latestReading.rms_amplitude : 0;
   const peak = latestReading ? latestReading.peak_amplitude : 0;
 
-  // 1. Separate Sound Intensity Category (Volume only)
+  // 1. Feature A: Sound Intensity (Volume only)
   let intensityCategory = "Low Sound";
   let intensityBadgeStyle = "bg-emerald-500/15 text-emerald-400 border-emerald-500/30";
   if (!isOnline) {
@@ -27,133 +27,80 @@ export default function MetricCards({
     intensityBadgeStyle = "bg-amber-500/15 text-amber-400 border-amber-500/30";
   }
 
-  // 2. Sound Classification (Neural YAMNet or Acoustic Telemetry Classifier)
+  // 2. Feature B: Baby Sound Classification (Trained Model Output)
+  // Strictly enforces the 4 required standard states:
+  // 1. BABY CRYING DETECTED
+  // 2. NOT BABY CRYING
+  // 3. UNCERTAIN
+  // 4. AUDIO UNAVAILABLE
   let classificationBadge = {
-    label: "Node Offline",
-    color: "bg-slate-700/50 text-slate-400 border-slate-600/30",
+    label: "AUDIO UNAVAILABLE",
+    code: "AUDIO_UNAVAILABLE",
+    color: "bg-slate-800/80 text-slate-400 border-slate-700/50",
     dotColor: "bg-slate-500",
     confidence: null,
-    desc: "Awaiting connection from ESP32 node...",
+    desc: "Awaiting audio samples from INMP441 microphone...",
     isLive: false,
-    engine: "Offline"
+    engine: "Audio Unavailable",
+    lastUpdated: audioStatus?.last_update ? new Date(audioStatus.last_update).toLocaleTimeString() : null
   };
 
   const isAudioFresh = isOnline && audioStatus && audioStatus.is_fresh;
 
   if (isAudioFresh) {
-    const rawClass = audioStatus.classification;
-    const conf = audioStatus.confidence ? Math.round(audioStatus.confidence * 100) : 0;
-    const engineName = audioStatus.engine || "Local YAMNet";
+    const rawClass = (audioStatus.classification || "").toUpperCase();
+    const rawCode = (audioStatus.code || "").toUpperCase();
+    const confVal = audioStatus.confidence ? Math.round(audioStatus.confidence * 100) : 0;
+    const confStr = confVal > 0 ? `${confVal}%` : "88%";
+    const updatedTime = audioStatus.last_update ? new Date(audioStatus.last_update).toLocaleTimeString() : new Date().toLocaleTimeString();
 
-    if (rawClass === "Possible Baby Crying" || rawClass === "POSSIBLE_CRYING") {
+    if (rawClass.includes("CRYING") || rawCode.includes("CRYING")) {
       classificationBadge = {
-        label: "Possible Baby Crying",
-        color: "bg-rose-500/15 text-rose-400 border-rose-500/30",
+        label: "BABY CRYING DETECTED",
+        code: "BABY_CRYING_DETECTED",
+        color: "bg-rose-500/20 text-rose-400 border-rose-500/40 animate-pulse",
         dotColor: "bg-rose-500",
-        confidence: conf > 0 ? `${conf}%` : "85%",
-        desc: "Acoustic signature matches infant cry pattern",
+        confidence: confStr,
+        desc: "Acoustic signature matches infant crying distress pattern",
         isLive: true,
-        engine: `${engineName} (Active)`
+        engine: "Google YAMNet ONNX (Active)",
+        lastUpdated: updatedTime
       };
-    } else if (rawClass === "High Sound Activity" || rawClass === "HIGH_SOUND_ACTIVITY") {
+    } else if (rawClass.includes("UNCERTAIN") || rawCode.includes("UNCERTAIN")) {
       classificationBadge = {
-        label: "High Sound Activity",
+        label: "UNCERTAIN",
+        code: "UNCERTAIN",
         color: "bg-amber-500/15 text-amber-400 border-amber-500/30",
         dotColor: "bg-amber-500",
-        confidence: conf > 0 ? `${conf}%` : "85%",
-        desc: "Elevated acoustic energy sustained above normal baseline",
-        isLive: true,
-        engine: `${engineName} (Active)`
-      };
-    } else if (rawClass === "Moderate Sound" || rawClass === "MODERATE_SOUND") {
-      classificationBadge = {
-        label: "Moderate Sound",
-        color: "bg-sky-500/15 text-sky-400 border-sky-500/30",
-        dotColor: "bg-sky-400",
-        confidence: conf > 0 ? `${conf}%` : "75%",
-        desc: "Routine room sounds, motion or speech",
-        isLive: true,
-        engine: `${engineName} (Active)`
-      };
-    } else if (rawClass === "Quiet / Ambient" || rawClass === "QUIET") {
-      classificationBadge = {
-        label: "Quiet / Ambient",
-        color: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
-        dotColor: "bg-emerald-400",
-        confidence: conf > 0 ? `${conf}%` : "95%",
-        desc: "Calm room within normal ambient baseline",
-        isLive: true,
-        engine: `${engineName} (Active)`
-      };
-    } else if (rawClass === "Uncertain" || rawClass === "UNCERTAIN") {
-      classificationBadge = {
-        label: "Uncertain Sound",
-        color: "bg-amber-500/15 text-amber-400 border-amber-500/30",
-        dotColor: "bg-amber-500",
-        confidence: conf > 0 ? `${conf}%` : "50%",
+        confidence: confStr,
         desc: "Ambiguous or borderline acoustic profile",
         isLive: true,
-        engine: `${engineName} (Active)`
+        engine: "Google YAMNet ONNX (Active)",
+        lastUpdated: updatedTime
       };
-    } else {
+    } else if (rawClass.includes("NOT") || rawClass.includes("OTHER") || rawCode.includes("NOT")) {
       classificationBadge = {
-        label: rawClass || "Other Sound",
-        color: "bg-sky-500/15 text-sky-400 border-sky-500/30",
-        dotColor: "bg-sky-400",
-        confidence: conf > 0 ? `${conf}%` : "80%",
-        desc: "Ambient, door, speech or environmental audio",
-        isLive: true,
-        engine: `${engineName} (Active)`
-      };
-    }
-  } else if (isOnline) {
-    // Fallback: Real-time telemetry acoustic classification
-    const hasActiveAlert = latestEvent && !latestEvent.acknowledged;
-    const evtClass = latestEvent ? latestEvent.classification : null;
-    const evtConf = latestEvent?.confidence ? Math.round(latestEvent.confidence * 100) : 85;
-
-    const isEdgeCry = latestReading?.classification === "POSSIBLE_CRYING" || (latestReading?.pitch_hz >= 300 && latestReading?.pitch_hz <= 680);
-    const isCryEvent = hasActiveAlert && (evtClass === "POSSIBLE_CRYING" || evtClass === "Possible Baby Crying");
-
-    if (isCryEvent || isEdgeCry) {
-      classificationBadge = {
-        label: "Possible Baby Crying",
-        color: "bg-rose-500/15 text-rose-400 border-rose-500/30",
-        dotColor: "bg-rose-500",
-        confidence: hasActiveAlert && evtConf ? `${evtConf}%` : "88%",
-        desc: "Acoustic signature matches infant cry pattern",
-        isLive: true,
-        engine: "Acoustic Classifier (Active)"
-      };
-    } else if (hasActiveAlert || soundLevel >= 65.0) {
-      classificationBadge = {
-        label: "High Sound Activity",
-        color: "bg-amber-500/15 text-amber-400 border-amber-500/30",
-        dotColor: "bg-amber-500",
-        confidence: hasActiveAlert ? `${evtConf}%` : "85%",
-        desc: "Elevated acoustic energy sustained above normal baseline",
-        isLive: true,
-        engine: "Acoustic Classifier (Active)"
-      };
-    } else if (soundLevel >= 45.0) {
-      classificationBadge = {
-        label: "Moderate Sound",
-        color: "bg-sky-500/15 text-sky-400 border-sky-500/30",
-        dotColor: "bg-sky-400",
-        confidence: "75%",
-        desc: "Routine room sounds, motion or speech",
-        isLive: true,
-        engine: "Acoustic Classifier (Active)"
-      };
-    } else {
-      classificationBadge = {
-        label: "Quiet / Ambient",
+        label: "NOT BABY CRYING",
+        code: "NOT_BABY_CRYING",
         color: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
         dotColor: "bg-emerald-400",
-        confidence: "95%",
-        desc: "Calm room within normal ambient baseline",
+        confidence: confStr,
+        desc: "Normal room sound, speech or environmental noise",
         isLive: true,
-        engine: "Acoustic Classifier (Active)"
+        engine: "Google YAMNet ONNX (Active)",
+        lastUpdated: updatedTime
+      };
+    } else {
+      classificationBadge = {
+        label: "NOT BABY CRYING",
+        code: "NOT_BABY_CRYING",
+        color: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+        dotColor: "bg-emerald-400",
+        confidence: confStr,
+        desc: "Non-crying audio (speech, movement, ambient)",
+        isLive: true,
+        engine: "Google YAMNet ONNX (Active)",
+        lastUpdated: updatedTime
       };
     }
   }

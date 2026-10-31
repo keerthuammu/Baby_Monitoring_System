@@ -55,3 +55,9 @@ $RECYCLE.BIN/
 *.hex
 *.bin
 *.elf
+
+# Backups
+*.bak
+*.bak.*
+esp32_firmware/backups/
+

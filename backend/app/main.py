@@ -30,6 +30,14 @@ async def lifespan(app: FastAPI):
         logger.info("Database schemas verified.")
     except Exception as e:
         logger.error(f"Error initializing database: {e}")
+
+    try:
+        from app.audio.yamnet_classifier import YamnetClassifier
+        classifier = YamnetClassifier.get_instance()
+        logger.info("Trained sound classification model (yamnet.onnx) loaded and verified on startup.")
+    except Exception as e:
+        logger.error(f"Failed to load trained model on startup: {e}")
+
     yield
     logger.info("Shutting down backend server.")
 

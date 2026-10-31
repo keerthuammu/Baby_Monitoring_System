@@ -2,11 +2,22 @@
  * API Client for Smart Baby Monitoring System Backend
  */
 
-let rawUrl = import.meta.env.VITE_API_URL || 'https://baby-monitor-backend-8m8o.onrender.com';
+let rawUrl = import.meta.env.VITE_API_URL;
 
-// Handle Render internal host name (e.g., 'baby-monitor-backend-8m8o') without full domain
-if (rawUrl && !rawUrl.includes('.') && !rawUrl.includes('localhost')) {
-  rawUrl = `${rawUrl}.onrender.com`;
+const isHostedOnRender = typeof window !== 'undefined' && window.location && window.location.hostname.includes('onrender.com');
+
+if (isHostedOnRender) {
+  // Hosted on Render Cloud
+  rawUrl = (rawUrl && rawUrl.includes('http')) ? rawUrl : 'https://baby-monitor-backend-8m8o.onrender.com';
+} else {
+  // Local development / local network
+  if (!rawUrl || rawUrl.includes('onrender.com') || rawUrl.includes('localhost')) {
+    if (typeof window !== 'undefined' && window.location && window.location.hostname && window.location.hostname !== 'localhost') {
+      rawUrl = `http://${window.location.hostname}:8000`;
+    } else {
+      rawUrl = 'http://localhost:8000';
+    }
+  }
 }
 
 const formattedUrl = rawUrl.startsWith('http') ? rawUrl : `https://${rawUrl}`;

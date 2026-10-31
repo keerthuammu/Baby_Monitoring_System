@@ -14,6 +14,7 @@ This software provides automated acoustic sound estimates for home monitoring.
 It is NOT a medical diagnostic device and cannot determine the cause of crying.
 """
 
+import logging
 import os
 import csv
 import io
@@ -24,6 +25,8 @@ import numpy as np
 import scipy.signal
 import onnxruntime as ort
 from app.audio.classifier import AcousticClassifier
+
+logger = logging.getLogger("yamnet_classifier")
 
 MODEL_DIR = os.path.join(os.path.dirname(__file__), "models")
 MODEL_PATH = os.path.join(MODEL_DIR, "yamnet.onnx")
@@ -37,11 +40,13 @@ class YamnetClassifier:
             raise FileNotFoundError(f"YAMNet model or class map not found in {MODEL_DIR}")
 
         # Initialize ONNX inference session
+        logger.info(f"Loading YAMNet ONNX model from: {MODEL_PATH}")
         self.session = ort.InferenceSession(
             MODEL_PATH,
             providers=["CPUExecutionProvider"]
         )
         self.input_name = self.session.get_inputs()[0].name
+        logger.info("YAMNet ONNX session initialized successfully on CPUExecutionProvider.")
 
         # Load AudioSet class mapping
         self.class_names: List[str] = []
@@ -50,11 +55,13 @@ class YamnetClassifier:
             next(reader)  # Skip header
             for row in reader:
                 self.class_names.append(row[2])
+        logger.info(f"Loaded {len(self.class_names)} AudioSet class definitions.")
 
         # State tracking for staleness and consecutive detections
         self.recent_cry_scores: List[float] = []
         self.last_update_time: Optional[datetime] = None
-        self.last_classification: str = "Microphone or connection unavailable"
+        self.last_classification: str = "AUDIO UNAVAILABLE"
+        self.last_code: str = "AUDIO_UNAVAILABLE"
         self.last_confidence: float = 0.0
         self.last_top_classes: List[Dict[str, Any]] = []
 
@@ -164,20 +171,20 @@ class YamnetClassifier:
         }
         any_top_cry = any(c["class_name"] in CRY_CLASS_NAMES and c["score"] >= 0.10 for c in top_classes[:3])
 
-        # 1. Possible Baby Crying: YAMNet AudioSet cry >= 0.20 OR top cry class OR physical infant cry profile
+        # 1. BABY CRYING DETECTED: YAMNet AudioSet cry >= 0.20 OR top cry class OR physical infant cry profile
         if (smoothed_cry_score >= 0.20 and sound_level_db >= 38.0) or any_top_cry or (acoustic_class == "POSSIBLE_CRYING"):
-            code = "POSSIBLE_CRYING"
-            display_label = "Possible Baby Crying"
+            code = "BABY_CRYING_DETECTED"
+            display_label = "BABY CRYING DETECTED"
             confidence = max(round(smoothed_cry_score, 2), round(acoustic_conf, 2), 0.88)
         elif smoothed_cry_score >= 0.10:
             # Borderline / ambiguous crying signal
             code = "UNCERTAIN"
-            display_label = "Uncertain"
+            display_label = "UNCERTAIN"
             confidence = round(smoothed_cry_score, 2)
         else:
-            # Definite non-crying sound (e.g. dog bark, speech, door slam, environmental)
-            code = "OTHER_SOUND"
-            display_label = "Other Sound"
+            # Definite non-crying sound (speech, music, door slam, claps, ambient)
+            code = "NOT_BABY_CRYING"
+            display_label = "NOT BABY CRYING"
             primary_other = top_classes[0]["score"] if top_classes else 0.80
             confidence = round(primary_other, 2)
 
@@ -185,8 +192,15 @@ class YamnetClassifier:
         completion_time = datetime.now(timezone.utc)
         self.last_update_time = completion_time
         self.last_classification = display_label
+        self.last_code = code
         self.last_confidence = confidence
         self.last_top_classes = top_classes
+
+        logger.info(
+            f"[INFERENCE] Completed in {len(signal)/sample_rate:.2f}s audio | "
+            f"Result: {display_label} ({confidence*100:.0f}%) | "
+            f"dB: {sound_level_db} | Top: {top_classes[0]['class_name'] if top_classes else 'N/A'}"
+        )
 
         return {
             "classification": code,
@@ -197,6 +211,7 @@ class YamnetClassifier:
             "peak_amplitude": peak_amp,
             "top_classes": top_classes,
             "crying_score_raw": round(cry_score, 3),
+            "is_baby_crying": (code == "BABY_CRYING_DETECTED"),
             "timestamp": completion_time.isoformat(),
             "status": "ACTIVE"
         }
@@ -241,17 +256,19 @@ class YamnetClassifier:
         """
         Returns the latest classification status, enforcing a freshness guard.
         If no audio update has been received within staleness_seconds,
-        marks the status as 'Microphone or connection unavailable'.
+        marks the status as 'AUDIO UNAVAILABLE'.
         """
         now = datetime.now(timezone.utc)
 
         if self.last_update_time is None:
-            return self._format_unavailable("Waiting for audio telemetry")
+            return self._format_unavailable("Waiting for microphone audio stream")
 
         time_since_update = (now - self.last_update_time).total_seconds()
         if time_since_update > staleness_seconds:
             return {
-                "classification": "Microphone or connection unavailable",
+                "classification": "AUDIO UNAVAILABLE",
+                "code": "AUDIO_UNAVAILABLE",
+                "is_baby_crying": False,
                 "confidence": 0.0,
                 "status": "UNAVAILABLE",
                 "is_fresh": False,
@@ -262,6 +279,8 @@ class YamnetClassifier:
 
         return {
             "classification": self.last_classification,
+            "code": getattr(self, "last_code", "NOT_BABY_CRYING"),
+            "is_baby_crying": (getattr(self, "last_code", "") == "BABY_CRYING_DETECTED"),
             "confidence": self.last_confidence,
             "status": "ACTIVE",
             "is_fresh": True,
@@ -272,7 +291,9 @@ class YamnetClassifier:
 
     def _format_unavailable(self, reason: str) -> Dict[str, Any]:
         return {
-            "classification": "Microphone or connection unavailable",
+            "classification": "AUDIO UNAVAILABLE",
+            "code": "AUDIO_UNAVAILABLE",
+            "is_baby_crying": False,
             "confidence": 0.0,
             "status": "UNAVAILABLE",
             "is_fresh": False,
