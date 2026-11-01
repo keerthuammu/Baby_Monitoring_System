@@ -70,6 +70,24 @@ class StatsResponse(BaseModel):
     latest_event: Optional[EventResponse] = None
 
 
+# --- Authoritative Audio Classification Schema ---
+class AuthoritativeClassificationResponse(BaseModel):
+    classification: str       # "BABY CRYING DETECTED", "NOT BABY CRYING", "UNCERTAIN", "AUDIO UNAVAILABLE"
+    code: str                 # "BABY_CRYING_DETECTED", "NOT_BABY_CRYING", "UNCERTAIN", "AUDIO_UNAVAILABLE"
+    confidence: float         # 0.0 to 1.0
+    timestamp: datetime
+    reading_id: Optional[int] = None
+    event_id: Optional[int] = None
+    is_baby_crying: bool = False
+    is_fresh: bool = False
+    model_status: str = "ONLINE"           # "ONLINE", "AWAITING_STREAM", "OFFLINE"
+    processing_status: str = "COMPLETED"   # "COMPLETED", "PROCESSING", "STALE", "UNAVAILABLE"
+    engine: str = "Google YAMNet ONNX"
+    source: str = "yamnet_neural_classifier"
+    sound_intensity: str = "LOW SOUND"     # "HIGH SOUND", "MODERATE SOUND", "LOW SOUND"
+    sound_level_db: float = 0.0
+    top_classes: List[dict] = []
+
 # --- Health Schema ---
 class HealthResponse(BaseModel):
     status: str

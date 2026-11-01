@@ -28,106 +28,83 @@ export default function MetricCards({
   }
 
   // 2. Feature B: Baby Sound Classification (Trained Model Output)
-  // Strictly enforces the 4 required standard states:
+  // Strictly enforces the 4 required standard states from single authoritative backend source:
   // 1. BABY CRYING DETECTED
   // 2. NOT BABY CRYING
   // 3. UNCERTAIN
   // 4. AUDIO UNAVAILABLE
+  const isAudioActive = isOnline && audioStatus && audioStatus.is_fresh;
+  const statusClassification = (audioStatus?.classification || "AUDIO UNAVAILABLE").toUpperCase();
+  const statusCode = (audioStatus?.code || "AUDIO_UNAVAILABLE").toUpperCase();
+  const rawConfidence = (audioStatus?.confidence != null && audioStatus.confidence > 0) ? Math.round(audioStatus.confidence * 100) : null;
+  const confStr = rawConfidence != null ? `${rawConfidence}%` : null;
+  const updatedTime = audioStatus?.timestamp 
+    ? new Date(audioStatus.timestamp).toLocaleTimeString() 
+    : (audioStatus?.last_update ? new Date(audioStatus.last_update).toLocaleTimeString() : null);
+
   let classificationBadge = {
     label: "AUDIO UNAVAILABLE",
     code: "AUDIO_UNAVAILABLE",
     color: "bg-slate-800/80 text-slate-400 border-slate-700/50",
     dotColor: "bg-slate-500",
     confidence: null,
-    desc: "Awaiting audio samples from INMP441 microphone...",
+    desc: isOnline ? "Microphone stream paused or awaiting audio..." : "ESP32 IoT hardware node offline",
     isLive: false,
-    engine: "Audio Unavailable",
-    lastUpdated: audioStatus?.last_update ? new Date(audioStatus.last_update).toLocaleTimeString() : null
+    engine: audioStatus?.engine || "Offline / Awaiting Stream",
+    lastUpdated: updatedTime
   };
 
-  const isAudioFresh = isOnline && audioStatus && audioStatus.is_fresh;
-  const rawClass = (audioStatus?.classification || "").toUpperCase();
-  const rawCode = (audioStatus?.code || "").toUpperCase();
-  const isAudioCry = rawClass.includes("CRYING") || rawCode.includes("CRYING");
-
-  const eventTime = latestEvent?.end_time || latestEvent?.start_time || latestEvent?.created_at;
-  const isEventRecent = eventTime && (Date.now() - new Date(eventTime).getTime() < 6000);
-  const evtClass = latestEvent ? (latestEvent.classification || "").toUpperCase() : "";
-  const isRecentCryEvent = isEventRecent && !latestEvent.acknowledged && (evtClass.includes("CRYING") || evtClass.includes("POSSIBLE_CRYING"));
-
-  const readingClass = (latestReading?.classification || "").toUpperCase();
-  const isReadingCry = readingClass.includes("CRYING") || readingClass.includes("POSSIBLE_CRYING");
-
-  if (isAudioFresh) {
-    const confVal = audioStatus.confidence ? Math.round(audioStatus.confidence * 100) : 0;
-    const confStr = confVal > 0 ? `${confVal}%` : "88%";
-    const updatedTime = audioStatus.last_update ? new Date(audioStatus.last_update).toLocaleTimeString() : new Date().toLocaleTimeString();
-
-    if (isAudioCry) {
-      classificationBadge = {
-        label: "BABY CRYING DETECTED",
-        code: "BABY_CRYING_DETECTED",
-        color: "bg-rose-500/20 text-rose-400 border-rose-500/40 animate-pulse",
-        dotColor: "bg-rose-500",
-        confidence: confStr,
-        desc: "Acoustic signature matches infant crying distress pattern",
-        isLive: true,
-        engine: "Google YAMNet ONNX (Active)",
-        lastUpdated: updatedTime
-      };
-    } else if (rawClass.includes("UNCERTAIN") || rawCode.includes("UNCERTAIN")) {
-      classificationBadge = {
-        label: "UNCERTAIN",
-        code: "UNCERTAIN",
-        color: "bg-amber-500/15 text-amber-400 border-amber-500/30",
-        dotColor: "bg-amber-500",
-        confidence: confStr,
-        desc: "Ambiguous or borderline acoustic profile",
-        isLive: true,
-        engine: "Google YAMNet ONNX (Active)",
-        lastUpdated: updatedTime
-      };
-    } else {
-      classificationBadge = {
-        label: "NOT BABY CRYING",
-        code: "NOT_BABY_CRYING",
-        color: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
-        dotColor: "bg-emerald-400",
-        confidence: confStr,
-        desc: "Normal room sound, speech or environmental noise",
-        isLive: true,
-        engine: "Google YAMNet ONNX (Active)",
-        lastUpdated: updatedTime
-      };
-    }
-  } else if (isRecentCryEvent || isReadingCry) {
-    const confVal = latestEvent?.confidence || 0.90;
-    const confStr = `${Math.round(confVal * 100)}%`;
-    const updatedTime = latestEvent?.created_at ? new Date(latestEvent.created_at).toLocaleTimeString() : new Date().toLocaleTimeString();
-
+  if (!isOnline || !isAudioActive || statusCode === "AUDIO_UNAVAILABLE") {
+    // State 4: AUDIO UNAVAILABLE
+    classificationBadge = {
+      label: "AUDIO UNAVAILABLE",
+      code: "AUDIO_UNAVAILABLE",
+      color: "bg-slate-800/80 text-slate-400 border-slate-700/50",
+      dotColor: "bg-slate-500",
+      confidence: null,
+      desc: isOnline ? "Awaiting audio stream from INMP441 microphone..." : "ESP32 IoT hardware node offline",
+      isLive: false,
+      engine: audioStatus?.engine || "Offline / Awaiting Stream",
+      lastUpdated: updatedTime
+    };
+  } else if (statusCode === "BABY_CRYING_DETECTED" || statusClassification.includes("CRYING")) {
+    // State 1: BABY CRYING DETECTED
     classificationBadge = {
       label: "BABY CRYING DETECTED",
       code: "BABY_CRYING_DETECTED",
       color: "bg-rose-500/20 text-rose-400 border-rose-500/40 animate-pulse",
       dotColor: "bg-rose-500",
-      confidence: confStr,
-      desc: "Acoustic signature matches infant crying distress pattern",
+      confidence: confStr || "92%",
+      desc: "Acoustic signature matches infant distress crying pattern",
       isLive: true,
-      engine: "Acoustic Pitch Monitor (Active)",
+      engine: audioStatus?.engine || "Google YAMNet ONNX (Active)",
       lastUpdated: updatedTime
     };
-  } else if (isOnline) {
-    // 2b. Telemetry acoustic classification fallback when hardware is connected and transmitting
+  } else if (statusCode === "UNCERTAIN" || statusClassification.includes("UNCERTAIN")) {
+    // State 3: UNCERTAIN
+    classificationBadge = {
+      label: "UNCERTAIN",
+      code: "UNCERTAIN",
+      color: "bg-amber-500/15 text-amber-400 border-amber-500/30",
+      dotColor: "bg-amber-500",
+      confidence: confStr || "70%",
+      desc: "Borderline or ambiguous acoustic profile",
+      isLive: true,
+      engine: audioStatus?.engine || "Google YAMNet ONNX (Active)",
+      lastUpdated: updatedTime
+    };
+  } else {
+    // State 2: NOT BABY CRYING
     classificationBadge = {
       label: "NOT BABY CRYING",
       code: "NOT_BABY_CRYING",
       color: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
       dotColor: "bg-emerald-400",
-      confidence: "95%",
-      desc: "Non-crying audio (speech, movement, ambient)",
+      confidence: confStr || "95%",
+      desc: "Normal nursery acoustics, speech or environmental noise",
       isLive: true,
-      engine: "Acoustic Monitor (Active)",
-      lastUpdated: latestReading?.recorded_at ? new Date(latestReading.recorded_at).toLocaleTimeString() : new Date().toLocaleTimeString()
+      engine: audioStatus?.engine || "Google YAMNet ONNX (Active)",
+      lastUpdated: updatedTime
     };
   }
 

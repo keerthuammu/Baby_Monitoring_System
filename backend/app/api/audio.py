@@ -12,7 +12,7 @@ from app.audio.yamnet_classifier import YamnetClassifier
 from app.services.monitor_service import MonitorService, to_utc
 from app.services.cloud_sync import forward_reading_to_cloud
 from app.models.models import CryingEvent
-from app.schemas.schemas import ReadingCreate
+from app.schemas.schemas import ReadingCreate, AuthoritativeClassificationResponse
 
 router = APIRouter(prefix="/api/audio", tags=["Audio Classification"])
 
@@ -20,73 +20,17 @@ import logging
 
 logger = logging.getLogger("audio_api")
 
-@router.get("/status", status_code=status.HTTP_200_OK)
+@router.get("/status", response_model=AuthoritativeClassificationResponse, status_code=status.HTTP_200_OK)
 def get_audio_classification_status(db: Session = Depends(get_db)):
     """
-    Returns the real-time audio sound classification and confidence from the trained model.
+    Returns the single authoritative real-time audio sound classification and confidence.
     Enforces the 4 required standard states:
     1. BABY CRYING DETECTED
     2. NOT BABY CRYING
     3. UNCERTAIN
     4. AUDIO UNAVAILABLE
     """
-    # Priority 1: Direct neural classifier stream status (Google YAMNet)
-    classifier = YamnetClassifier.get_instance()
-    status_data = classifier.get_current_status(staleness_seconds=6.0)
-
-    if status_data.get("is_fresh"):
-        status_data["engine"] = "Google YAMNet ONNX"
-        return status_data
-
-    # Priority 2: Fallback to recent crying incident in database if stream paused within last 6 seconds
-    now = datetime.now(timezone.utc)
-    recent_threshold = now - timedelta(seconds=6)
-
-    recent_cry = (
-        db.query(CryingEvent)
-        .filter(
-            CryingEvent.end_time >= recent_threshold,
-            CryingEvent.classification == "POSSIBLE_CRYING",
-            CryingEvent.acknowledged == False
-        )
-        .order_by(desc(CryingEvent.end_time))
-        .first()
-    )
-
-    if recent_cry:
-        conf_val = round(float(recent_cry.confidence or 0.90), 2)
-        end_utc = to_utc(recent_cry.end_time)
-        secs_ago = max(0.0, round((now - end_utc).total_seconds(), 1)) if end_utc else 0.0
-
-        return {
-            "classification": "BABY CRYING DETECTED",
-            "code": "BABY_CRYING_DETECTED",
-            "is_baby_crying": True,
-            "confidence": conf_val,
-            "status": "ACTIVE",
-            "is_fresh": True,
-            "engine": "Acoustic Incident Monitor",
-            "source": "crying_incident_monitor",
-            "seconds_since_update": secs_ago,
-            "last_update": recent_cry.end_time.isoformat() if recent_cry.end_time else now.isoformat(),
-            "top_classes": [
-                {"class_name": "Baby cry, infant cry", "score": conf_val}
-            ]
-        }
-
-    # Guard: If no fresh audio arrived in last 6 seconds, report AUDIO UNAVAILABLE
-    return {
-        "classification": "AUDIO UNAVAILABLE",
-        "code": "AUDIO_UNAVAILABLE",
-        "confidence": 0.0,
-        "status": "UNAVAILABLE",
-        "is_fresh": False,
-        "engine": "Offline / Awaiting Stream",
-        "source": "model_freshness_guard",
-        "seconds_since_update": status_data.get("seconds_since_update", 0.0),
-        "last_update": status_data.get("last_update"),
-        "top_classes": []
-    }
+    return MonitorService.get_authoritative_status(db, staleness_seconds=8.0)
 
 @router.post("/classify", status_code=status.HTTP_200_OK)
 async def classify_audio_sample(

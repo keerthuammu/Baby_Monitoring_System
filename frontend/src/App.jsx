@@ -104,7 +104,25 @@ export default function App() {
     ? (Date.now() - new Date(latestReading.recorded_at).getTime() < 10000)
     : false;
   const isOnline = Boolean(stats?.device_status === 'ONLINE' && isReadingFresh);
-  const activeAlert = events.find(e => !e.acknowledged);
+
+  // Single Authoritative Live State Agreement:
+  // Is live audio currently classified as baby crying?
+  const isLiveCrying = Boolean(
+    isOnline &&
+    audioStatus?.is_fresh && 
+    (audioStatus?.code === 'BABY_CRYING_DETECTED' || (audioStatus?.classification || '').includes('CRYING'))
+  );
+
+  // Active Alert Banner:
+  // Strictly agrees with current authoritative live status.
+  // A historical unacknowledged event is only displayed if it is actively ongoing or concluded within the freshness window (< 10 seconds).
+  // If the baby has stopped crying and current audio is NOT BABY CRYING, UNCERTAIN, or AUDIO UNAVAILABLE,
+  // the top alert banner does NOT display an outdated crying incident.
+  const unacknowledgedEvent = events.find(e => !e.acknowledged && (e.classification || '').includes('CRYING'));
+  const eventTime = unacknowledgedEvent?.end_time || unacknowledgedEvent?.start_time;
+  const isEventRecent = eventTime ? (Date.now() - new Date(eventTime).getTime() < 10000) : false;
+
+  const activeAlert = (isLiveCrying || (unacknowledgedEvent && isEventRecent)) ? unacknowledgedEvent : null;
 
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col text-slate-100">

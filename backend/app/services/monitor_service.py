@@ -18,6 +18,123 @@ def to_utc(dt: Optional[datetime]) -> Optional[datetime]:
     return dt.astimezone(timezone.utc)
 
 class MonitorService:
+    _latest_authoritative_state: Optional[dict] = None
+
+    @classmethod
+    def set_authoritative_state(cls, state: dict):
+        cls._latest_authoritative_state = state
+
+    @classmethod
+    def get_authoritative_status(cls, db: Session, staleness_seconds: float = 8.0) -> dict:
+        now = utc_now()
+
+        # Priority 1: Direct in-memory authoritative state from neural classifier or recent telemetry
+        if cls._latest_authoritative_state:
+            last_ts = cls._latest_authoritative_state.get("timestamp")
+            if isinstance(last_ts, str):
+                try:
+                    last_ts = datetime.fromisoformat(last_ts)
+                except Exception:
+                    last_ts = None
+            if last_ts:
+                last_utc = to_utc(last_ts)
+                age = (now - last_utc).total_seconds()
+                if age <= staleness_seconds:
+                    res = dict(cls._latest_authoritative_state)
+                    res["seconds_since_update"] = round(age, 1)
+                    res["is_fresh"] = True
+                    return res
+
+        # Priority 2: Check active neural classifier state directly
+        try:
+            from app.audio.yamnet_classifier import YamnetClassifier
+            classifier = YamnetClassifier.get_instance()
+            yamnet_status = classifier.get_current_status(staleness_seconds=staleness_seconds)
+            if yamnet_status.get("is_fresh"):
+                raw_code = yamnet_status.get("code", "NOT_BABY_CRYING")
+                is_cry = (raw_code == "BABY_CRYING_DETECTED")
+                is_unc = (raw_code == "UNCERTAIN")
+                std_code = "BABY_CRYING_DETECTED" if is_cry else ("UNCERTAIN" if is_unc else "NOT_BABY_CRYING")
+                std_label = "BABY CRYING DETECTED" if is_cry else ("UNCERTAIN" if is_unc else "NOT BABY CRYING")
+
+                res = {
+                    "classification": std_label,
+                    "code": std_code,
+                    "confidence": round(float(yamnet_status.get("confidence", 0.85)), 2),
+                    "timestamp": yamnet_status.get("last_update") or now.isoformat(),
+                    "reading_id": None,
+                    "event_id": None,
+                    "is_baby_crying": is_cry,
+                    "is_fresh": True,
+                    "model_status": "ONLINE",
+                    "processing_status": "COMPLETED",
+                    "engine": "Google YAMNet ONNX",
+                    "source": "yamnet_neural_stream",
+                    "sound_intensity": "MODERATE SOUND",
+                    "sound_level_db": 55.0,
+                    "seconds_since_update": yamnet_status.get("seconds_since_update", 0.0),
+                    "top_classes": yamnet_status.get("top_classes", [])
+                }
+                cls._latest_authoritative_state = res
+                return res
+        except Exception:
+            pass
+
+        # Priority 3: Fallback to latest reading in database within freshness window
+        latest_reading = db.query(SensorReading).order_by(desc(SensorReading.recorded_at)).first()
+        if latest_reading and latest_reading.recorded_at:
+            age = (now - to_utc(latest_reading.recorded_at)).total_seconds()
+            if age <= staleness_seconds:
+                raw_cls = (latest_reading.classification or "").upper()
+                is_cry = "CRYING" in raw_cls
+                is_unc = "UNCERTAIN" in raw_cls
+                code = "BABY_CRYING_DETECTED" if is_cry else ("UNCERTAIN" if is_unc else "NOT_BABY_CRYING")
+                disp = "BABY CRYING DETECTED" if is_cry else ("UNCERTAIN" if is_unc else "NOT BABY CRYING")
+                conf = latest_reading.confidence or (0.92 if is_cry else 0.85)
+                sound_level = latest_reading.sound_level or 0.0
+                intensity = "HIGH SOUND" if sound_level >= 65.0 else ("MODERATE SOUND" if sound_level >= 45.0 else "LOW SOUND")
+
+                state = {
+                    "classification": disp,
+                    "code": code,
+                    "confidence": round(float(conf), 2),
+                    "timestamp": latest_reading.recorded_at.isoformat(),
+                    "reading_id": latest_reading.id,
+                    "event_id": None,
+                    "is_baby_crying": is_cry,
+                    "is_fresh": True,
+                    "model_status": "ONLINE",
+                    "processing_status": "COMPLETED",
+                    "engine": "Acoustic Telemetry Stream",
+                    "source": "sensor_reading",
+                    "sound_intensity": intensity,
+                    "sound_level_db": sound_level,
+                    "seconds_since_update": round(age, 1),
+                    "top_classes": []
+                }
+                cls._latest_authoritative_state = state
+                return state
+
+        # Guard: If no fresh audio or telemetry arrived in the last staleness_seconds -> STRICTLY AUDIO UNAVAILABLE
+        return {
+            "classification": "AUDIO UNAVAILABLE",
+            "code": "AUDIO_UNAVAILABLE",
+            "confidence": 0.0,
+            "timestamp": now.isoformat(),
+            "reading_id": None,
+            "event_id": None,
+            "is_baby_crying": False,
+            "is_fresh": False,
+            "model_status": "AWAITING_STREAM",
+            "processing_status": "UNAVAILABLE",
+            "engine": "Offline / Awaiting Stream",
+            "source": "freshness_guard",
+            "sound_intensity": "OFFLINE",
+            "sound_level_db": 0.0,
+            "seconds_since_update": round(staleness_seconds + 1.0, 1),
+            "top_classes": []
+        }
+
     @staticmethod
     def get_or_create_device(db: Session, device_id: str, device_name: str = "ESP32 Baby Monitor") -> Device:
         device = db.query(Device).filter(Device.device_id == device_id).first()
@@ -77,21 +194,22 @@ class MonitorService:
         final_reading_class = None
         final_reading_conf = detected_conf
 
+        ev = None
         if is_yamnet_crying:
             final_reading_class = "BABY_CRYING_DETECTED"
             final_reading_conf = detected_conf if detected_conf is not None else 0.96
             event_class = "POSSIBLE_CRYING"
-            MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, final_reading_conf)
+            ev = MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, final_reading_conf)
         elif is_edge_crying:
             final_reading_class = "POSSIBLE_CRYING"
             final_reading_conf = detected_conf if detected_conf is not None else 0.90
             event_class = "POSSIBLE_CRYING"
-            MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, final_reading_conf)
+            ev = MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, final_reading_conf)
         elif is_high_sound:
             final_reading_class = "HIGH_SOUND_ACTIVITY"
             final_reading_conf = detected_conf if detected_conf is not None else 0.85
             event_class = "HIGH_SOUND_ACTIVITY"
-            MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, final_reading_conf)
+            ev = MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, final_reading_conf)
         else:
             final_reading_class = detected_class or "NORMAL"
 
@@ -107,9 +225,37 @@ class MonitorService:
             received_at=now
         )
         db.add(reading)
-
         db.commit()
         db.refresh(reading)
+
+        # Synchronize single authoritative classification state
+        is_cry = (final_reading_class in ["BABY_CRYING_DETECTED", "POSSIBLE_CRYING"])
+        is_unc = (final_reading_class == "UNCERTAIN")
+        std_code = "BABY_CRYING_DETECTED" if is_cry else ("UNCERTAIN" if is_unc else "NOT_BABY_CRYING")
+        std_label = "BABY CRYING DETECTED" if is_cry else ("UNCERTAIN" if is_unc else "NOT BABY CRYING")
+        sound_level = reading.sound_level
+        intensity = "HIGH SOUND" if sound_level >= 65.0 else ("MODERATE SOUND" if sound_level >= 45.0 else "LOW SOUND")
+
+        auth_state = {
+            "classification": std_label,
+            "code": std_code,
+            "confidence": round(float(final_reading_conf or 0.85), 2),
+            "timestamp": recorded_at.isoformat(),
+            "reading_id": reading.id,
+            "event_id": ev.id if ev else None,
+            "is_baby_crying": is_cry,
+            "is_fresh": True,
+            "model_status": "ONLINE",
+            "processing_status": "COMPLETED",
+            "engine": "Google YAMNet ONNX" if classification == "BABY_CRYING_DETECTED" else "Acoustic Telemetry Stream",
+            "source": "live_ingestion",
+            "sound_intensity": intensity,
+            "sound_level_db": sound_level,
+            "seconds_since_update": 0.0,
+            "top_classes": []
+        }
+        MonitorService.set_authoritative_state(auth_state)
+
         return reading
 
     @staticmethod
@@ -119,7 +265,7 @@ class MonitorService:
         current_time: datetime,
         classification: str = "HIGH_SOUND_ACTIVITY",
         confidence: float = 0.85
-    ):
+    ) -> Optional[CryingEvent]:
         """
         Groups continuous loud sound into an ongoing event (debouncing)
         rather than creating hundreds of duplicate event rows.
@@ -157,6 +303,7 @@ class MonitorService:
             curr = to_utc(current_time)
             if start and curr:
                 active_event.duration_seconds = max(1.0, (curr - start).total_seconds())
+            return active_event
         else:
             # Create a separate new event
             new_event = CryingEvent(
@@ -170,6 +317,7 @@ class MonitorService:
                 created_at=current_time
             )
             db.add(new_event)
+            return new_event
 
     @staticmethod
     def get_latest_reading(db: Session, device_id: Optional[str] = None) -> Optional[SensorReading]:
@@ -202,13 +350,25 @@ class MonitorService:
                 for r in readings:
                     if r.classification is None and r.recorded_at:
                         r_utc = to_utc(r.recorded_at)
+                        is_during_cry = False
                         for ev in crying_events:
                             ev_start = to_utc(ev.start_time) - timedelta(seconds=3)
                             ev_end = to_utc(ev.end_time or ev.start_time) + timedelta(seconds=max(3.0, (ev.duration_seconds or 0.0) + 3.0))
-                            if ev_start <= r_utc <= ev_end and r.sound_level >= 45.0:
+                            if ev_start <= r_utc <= ev_end and r.sound_level >= 48.0:
                                 r.classification = "POSSIBLE_CRYING"
                                 r.confidence = ev.confidence or 0.90
+                                is_during_cry = True
                                 break
+                        if not is_during_cry:
+                            if r.sound_level >= settings.SOUND_HIGH_THRESHOLD:
+                                r.classification = "HIGH_SOUND_ACTIVITY"
+                                r.confidence = 0.85
+                            elif r.sound_level >= 45.0:
+                                r.classification = "MODERATE_SOUND"
+                                r.confidence = 0.80
+                            else:
+                                r.classification = "QUIET"
+                                r.confidence = 0.95
         return readings
 
     @staticmethod
