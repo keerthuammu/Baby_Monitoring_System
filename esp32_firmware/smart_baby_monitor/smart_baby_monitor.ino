@@ -36,8 +36,8 @@
 // 1. NETWORK & BACKEND CONFIGURATION
 // ==========================================
 // Enter your 2.4 GHz Wi-Fi credentials:
-const char* WIFI_SSID     = "Nothing Phone 3a;
-const char* WIFI_PASSWORD = "abhilashkk";
+const char* WIFI_SSID     = "Nothing Phone 3a";
+const char* WIFI_PASSWORD = "Keerthuammu29@";
 
 // Target Ingestion Endpoint (Render Cloud Backend):
 const char* BACKEND_URL        = "https://baby-monitor-backend-8m8o.onrender.com/api/readings";
@@ -51,11 +51,11 @@ const char* API_KEY            = "baby_monitor_device_secret_key_123";
 // Unique Device Identifier:
 const char* DEVICE_ID          = "esp32-nursery-01";
 
-// Transmission interval in milliseconds (1500 ms gives Render Cloud HTTPS TLS socket room to respond smoothly):
-const unsigned long TRANSMIT_INTERVAL_MS = 1500;
+// Transmission interval in milliseconds (1000 ms for responsive real-time dashboard):
+const unsigned long TRANSMIT_INTERVAL_MS = 1000;
 
-// Audio classification chunk interval (2000 ms for stable cloud inference):
-const unsigned long AUDIO_CHUNK_INTERVAL_MS = 2000;
+// Audio classification chunk interval (1200 ms for rapid neural inference):
+const unsigned long AUDIO_CHUNK_INTERVAL_MS = 1200;
 
 // ==========================================
 // 2. I2S MICROPHONE CONFIGURATION
@@ -242,13 +242,13 @@ void sendTelemetryToBackend(float soundLevel, float rms, int peak, const char* c
 
   if (urlStr.startsWith("https://")) {
     secureClient.setInsecure(); // Permits SSL handshake with Render cloud
-    secureClient.setTimeout(6000);
+    secureClient.setTimeout(10000); // 10.0s for mobile hotspot SSL handshake
     http.begin(secureClient, BACKEND_URL);
   } else {
     plainClient.setTimeout(4000);
     http.begin(plainClient, BACKEND_URL);
   }
-  http.setTimeout(6000); // 6.0 second timeout for cloud HTTPS latency
+  http.setTimeout(10000); // 10.0 second timeout for cloud HTTPS latency
 
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-API-Key", API_KEY);
@@ -305,13 +305,13 @@ void sendAudioChunkToBackend() {
 
   if (audioUrl.startsWith("https://")) {
     secureClient.setInsecure();
-    secureClient.setTimeout(5000);
+    secureClient.setTimeout(10000);
     http.begin(secureClient, audioUrl);
   } else {
-    plainClient.setTimeout(3000);
+    plainClient.setTimeout(4000);
     http.begin(plainClient, audioUrl);
   }
-  http.setTimeout(5000);
+  http.setTimeout(10000);
 
   http.addHeader("Content-Type", "application/octet-stream");
   http.addHeader("X-API-Key", API_KEY);
