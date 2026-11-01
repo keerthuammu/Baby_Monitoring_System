@@ -434,9 +434,15 @@ void loop() {
       const char* classification = "QUIET";
       float confidence = 0.85f;
 
-      bool isCryPitch = (pitch >= 300.0f && pitch <= 720.0f) && (periodicity >= 0.30f);
+      bool isCryPitch = (pitch >= 280.0f && pitch <= 750.0f) && (periodicity >= 0.22f);
 
-      if (soundLevel >= 65.0f) {
+      if (isCryPitch && soundLevel >= 48.0f) {
+        // Infant crying pitch confirmed in vocal frequency band
+        babyStatus = "🚨 BABY IS CRYING";
+        classification = "POSSIBLE_CRYING";
+        confidence = 0.92f;
+        Serial.printf("[ACOUSTIC PITCH] Infant crying frequency detected: %.1f Hz (periodicity: %.2f)\n", pitch, periodicity);
+      } else if (soundLevel >= 65.0f) {
         // High non-crying sound (door slam, loud conversation, clapping, domestic noise)
         classification = "HIGH_SOUND_ACTIVITY";
         babyStatus = "NOT BABY CRYING";
@@ -451,12 +457,6 @@ void loop() {
         classification = "QUIET";
         babyStatus = "NOT BABY CRYING";
         confidence = 0.95f;
-      }
-
-      if (isCryPitch && soundLevel >= 48.0f) {
-        babyStatus = "🚨 BABY IS CRYING";
-        classification = "POSSIBLE_CRYING";
-        Serial.printf("[ACOUSTIC PITCH] Infant crying frequency detected: %.1f Hz (periodicity: %.2f)\n", pitch, periodicity);
       }
 
       // Explicit Serial Monitor output: Clearly shows Volume, Baby Crying Status, and Pitch

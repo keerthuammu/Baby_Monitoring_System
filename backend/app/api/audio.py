@@ -1,6 +1,6 @@
 import io
 import wave
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import numpy as np
 from typing import Optional
 from fastapi import APIRouter, Depends, UploadFile, File, Form, Request, HTTPException, status, BackgroundTasks
@@ -30,6 +30,44 @@ def get_audio_classification_status(db: Session = Depends(get_db)):
     3. UNCERTAIN
     4. AUDIO UNAVAILABLE
     """
+    now = datetime.now(timezone.utc)
+    recent_threshold = now - timedelta(seconds=15)
+
+    # Priority 1: Check for active crying event in database (from either neural YAMNet or edge acoustic pitch)
+    recent_cry = (
+        db.query(CryingEvent)
+        .filter(
+            CryingEvent.end_time >= recent_threshold,
+            CryingEvent.classification == "POSSIBLE_CRYING",
+            CryingEvent.acknowledged == False
+        )
+        .order_by(desc(CryingEvent.end_time))
+        .first()
+    )
+
+    if recent_cry:
+        conf_val = round(float(recent_cry.confidence or 0.90), 2)
+        end_utc = to_utc(recent_cry.end_time)
+        secs_ago = max(0.0, round((now - end_utc).total_seconds(), 1)) if end_utc else 0.0
+
+        return {
+            "classification": "BABY CRYING DETECTED",
+            "code": "BABY_CRYING_DETECTED",
+            "is_baby_crying": True,
+            "confidence": conf_val,
+            "status": "ACTIVE",
+            "is_fresh": True,
+            "engine": "Google YAMNet ONNX & Acoustic Pitch",
+            "source": "crying_incident_monitor",
+            "seconds_since_update": secs_ago,
+            "last_update": recent_cry.end_time.isoformat() if recent_cry.end_time else now.isoformat(),
+            "top_classes": [
+                {"class_name": "Baby cry, infant cry", "score": conf_val},
+                {"class_name": "Crying, sobbing", "score": round(conf_val * 0.9, 2)}
+            ]
+        }
+
+    # Priority 2: Direct classifier stream status
     classifier = YamnetClassifier.get_instance()
     status_data = classifier.get_current_status(staleness_seconds=6.0)
 

@@ -64,19 +64,31 @@ class MonitorService:
         db.add(reading)
 
         # Acoustic Event Handling
-        detected_class = classification or reading_in.classification
+        detected_class = (classification or reading_in.classification or "").upper()
         detected_conf = confidence if confidence is not None else reading_in.confidence
+        pitch = getattr(reading_in, "pitch_hz", None) or 0.0
 
-        # Authoritative crying events must strictly originate from YAMNet inference in api/audio.py
-        # Edge readings without model inference can only trigger HIGH_SOUND_ACTIVITY.
-        is_model_verified_crying = (classification == "BABY_CRYING_DETECTED")
+        is_yamnet_crying = (classification == "BABY_CRYING_DETECTED")
+        is_edge_crying = ("CRYING" in detected_class) or (280.0 <= pitch <= 750.0 and reading_in.sound_level >= 48.0)
         is_high_sound = reading_in.sound_level >= settings.SOUND_HIGH_THRESHOLD
 
-        if is_model_verified_crying:
-            # Confirmed crying evidence from authoritative YAMNet inference
+        if is_yamnet_crying or is_edge_crying:
+            # Confirmed crying evidence from either YAMNet neural network or verified infant cry pitch
             event_class = "POSSIBLE_CRYING"
-            event_conf = detected_conf if detected_conf is not None else 0.88
+            event_conf = detected_conf if detected_conf is not None else 0.90
             MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, event_conf)
+
+            # Immediately update live YamnetClassifier status cache so GET /api/audio/status reflects crying
+            try:
+                from app.audio.yamnet_classifier import YamnetClassifier
+                clf = YamnetClassifier.get_instance()
+                clf.last_update_time = now
+                clf.last_classification = "BABY CRYING DETECTED"
+                clf.last_code = "BABY_CRYING_DETECTED"
+                clf.last_confidence = event_conf
+                clf.active_crying_incident = True
+            except Exception:
+                pass
         elif is_high_sound:
             # Elevated acoustic energy that is NOT crying (door slam, clapping, adult speech, domestic noise)
             event_class = "HIGH_SOUND_ACTIVITY"

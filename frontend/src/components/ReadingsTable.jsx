@@ -3,7 +3,7 @@ import { Database, Radio } from 'lucide-react';
 
 export default function ReadingsTable({ readings, events, isOnline }) {
   const displayedReadings = (readings || []).slice(0, 15);
-  const cryingEvents = (events || []).filter(e => e.classification === 'POSSIBLE_CRYING');
+  const cryingEvents = (events || []).filter(e => (e.classification || '').toUpperCase().includes('CRYING'));
 
   return (
     <div className="glass-panel rounded-2xl p-5 transition-all">
@@ -43,8 +43,14 @@ export default function ReadingsTable({ readings, events, isOnline }) {
             </thead>
             <tbody className="divide-y divide-slate-800/60 text-slate-300">
               {displayedReadings.map((r) => {
-                const isEdgeCry = r.classification === 'POSSIBLE_CRYING' || 
-                  r.classification === 'BABY_CRYING_DETECTED';
+                const rTime = new Date(r.recorded_at).getTime();
+                const isDuringCryEvent = cryingEvents.some(e => {
+                  const startTime = new Date(e.start_time).getTime() - 3000;
+                  const endTime = new Date(e.end_time || e.start_time).getTime() + 4000;
+                  return rTime >= startTime && rTime <= endTime;
+                });
+
+                const isEdgeCry = (r.classification || '').toUpperCase().includes('CRYING') || isDuringCryEvent;
 
                 // Feature A: Sound Intensity (Decoupled Volume Level)
                 let intensityLabel = "Low Sound";
