@@ -44,7 +44,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Smart Baby Monitoring System API",
     description="IoT Acoustic Sensor Ingestion & Alert Backend (MCA College Major Project)",
-    version="1.0.0",
+    version="1.1.0",
     lifespan=lifespan
 )
 
