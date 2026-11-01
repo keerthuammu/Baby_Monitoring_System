@@ -285,8 +285,8 @@ void sendAudioChunkToBackend() {
   HTTPClient http;
   String audioUrl = String(AUDIO_CLASSIFY_URL);
 
-  // If AUDIO_CLASSIFY_URL was left on local IP while BACKEND_URL points to cloud, auto-adapt:
-  if (String(BACKEND_URL).indexOf("/api/readings") >= 0 && audioUrl.indexOf("192.168") >= 0 && String(BACKEND_URL).startsWith("https://")) {
+  // Auto-adapt: If BACKEND_URL points to cloud via HTTPS, automatically route audio chunks to cloud classify endpoint
+  if (String(BACKEND_URL).startsWith("https://") && String(BACKEND_URL).indexOf("/api/readings") >= 0) {
     audioUrl = String(BACKEND_URL);
     audioUrl.replace("/api/readings", "/api/audio/classify");
   }

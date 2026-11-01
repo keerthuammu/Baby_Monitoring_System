@@ -33,37 +33,40 @@ export default function ReadingsTable({ readings, events }) {
               <tr className="border-b border-slate-800 text-slate-400 uppercase text-[10px] tracking-wider font-semibold font-sans">
                 <th className="py-2 px-3">Packet ID</th>
                 <th className="py-2 px-3">Recorded Time</th>
-                <th className="py-2 px-3">Sound Level</th>
-                <th className="py-2 px-3">Classification</th>
+                <th className="py-2 px-3">Sound Intensity</th>
+                <th className="py-2 px-3">Baby Classification</th>
                 <th className="py-2 px-3">RMS Energy</th>
                 <th className="py-2 px-3">Peak Amplitude</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60 text-slate-300">
               {displayedReadings.map((r) => {
-                const isEdgeCry = r.classification === 'POSSIBLE_CRYING' ||
-                  (r.pitch_hz >= 300 && r.pitch_hz <= 680) ||
+                const isEdgeCry = r.classification === 'POSSIBLE_CRYING' || 
+                  r.classification === 'BABY_CRYING_DETECTED' ||
                   cryingEvents.some(e => {
                     const rTime = new Date(r.recorded_at).getTime();
                     const eStart = new Date(e.start_time).getTime();
                     const eEnd = e.end_time ? new Date(e.end_time).getTime() : eStart + (e.duration_seconds * 1000 || 5000);
                     return rTime >= eStart - 2000 && rTime <= eEnd + 2000;
                   });
-                const isHigh = r.sound_level >= 65.0;
-                const isModerate = r.sound_level >= 45.0 && r.sound_level < 65.0;
 
-                let classLabel = "Quiet / Ambient";
-                let classStyle = "bg-emerald-500/15 text-emerald-400 border-emerald-500/30";
+                // Feature A: Sound Intensity (Decoupled Volume Level)
+                let intensityLabel = "Low Sound";
+                let intensityStyle = "bg-emerald-500/15 text-emerald-400 border-emerald-500/30";
+                if (r.sound_level >= 65.0) {
+                  intensityLabel = "High Sound";
+                  intensityStyle = "bg-rose-500/15 text-rose-400 border-rose-500/30";
+                } else if (r.sound_level >= 45.0) {
+                  intensityLabel = "Moderate Sound";
+                  intensityStyle = "bg-amber-500/15 text-amber-400 border-amber-500/30";
+                }
 
+                // Feature B: Baby Sound Classification (Trained Model / Verified Event)
+                let babyLabel = "Not Baby Crying";
+                let babyStyle = "bg-emerald-500/15 text-emerald-400 border-emerald-500/30";
                 if (isEdgeCry) {
-                  classLabel = "Baby Crying";
-                  classStyle = "bg-rose-500/20 text-rose-400 border-rose-500/40 font-bold animate-pulse";
-                } else if (isHigh) {
-                  classLabel = "High Sound";
-                  classStyle = "bg-amber-500/15 text-amber-400 border-amber-500/30";
-                } else if (isModerate) {
-                  classLabel = "Moderate Sound";
-                  classStyle = "bg-sky-500/15 text-sky-400 border-sky-500/30";
+                  babyLabel = "🚨 Baby Crying";
+                  babyStyle = "bg-rose-500/20 text-rose-400 border-rose-500/40 font-bold animate-pulse";
                 }
 
                 return (
@@ -73,13 +76,18 @@ export default function ReadingsTable({ readings, events }) {
                       {new Date(r.recorded_at).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                     </td>
                     <td className="py-2.5 px-3">
-                      <span className={`font-semibold ${isHigh ? 'text-amber-400' : 'text-emerald-400'}`}>
-                        {r.sound_level.toFixed(1)} dB
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-white">
+                          {r.sound_level.toFixed(1)} dB
+                        </span>
+                        <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold border ${intensityStyle}`}>
+                          {intensityLabel}
+                        </span>
+                      </div>
                     </td>
                     <td className="py-2.5 px-3 font-sans">
-                      <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold border ${classStyle}`}>
-                        {classLabel}
+                      <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold border ${babyStyle}`}>
+                        {babyLabel}
                       </span>
                     </td>
                     <td className="py-2.5 px-3 text-slate-400">{r.rms_amplitude.toFixed(1)}</td>
