@@ -68,27 +68,28 @@ class MonitorService:
         detected_conf = confidence if confidence is not None else reading_in.confidence
         pitch = getattr(reading_in, "pitch_hz", None) or 0.0
 
+        # Primary authority: YAMNet neural network inference (if provided)
+        # Secondary authority: Verified infant cry pitch (380 - 680 Hz) explicitly flagged as crying by edge device
         is_yamnet_crying = (classification == "BABY_CRYING_DETECTED")
-        is_edge_crying = ("CRYING" in detected_class) or (280.0 <= pitch <= 750.0 and reading_in.sound_level >= 48.0)
+        is_yamnet_non_crying = (classification is not None and classification != "BABY_CRYING_DETECTED")
+
+        # Edge crying is only accepted if YAMNet didn't classify it as non-crying,
+        # AND edge classification explicitly claims POSSIBLE_CRYING,
+        # AND pitch is strictly in the true infant distress vocal band (380 - 680 Hz),
+        # AND sound level is elevated (>= 52 dB).
+        is_edge_crying = (
+            not is_yamnet_non_crying and
+            ("CRYING" in detected_class) and
+            (380.0 <= pitch <= 680.0) and
+            (reading_in.sound_level >= 52.0)
+        )
         is_high_sound = reading_in.sound_level >= settings.SOUND_HIGH_THRESHOLD
 
         if is_yamnet_crying or is_edge_crying:
-            # Confirmed crying evidence from either YAMNet neural network or verified infant cry pitch
+            # Confirmed crying evidence from authoritative YAMNet inference or verified infant pitch band
             event_class = "POSSIBLE_CRYING"
             event_conf = detected_conf if detected_conf is not None else 0.90
             MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, event_conf)
-
-            # Immediately update live YamnetClassifier status cache so GET /api/audio/status reflects crying
-            try:
-                from app.audio.yamnet_classifier import YamnetClassifier
-                clf = YamnetClassifier.get_instance()
-                clf.last_update_time = now
-                clf.last_classification = "BABY CRYING DETECTED"
-                clf.last_code = "BABY_CRYING_DETECTED"
-                clf.last_confidence = event_conf
-                clf.active_crying_incident = True
-            except Exception:
-                pass
         elif is_high_sound:
             # Elevated acoustic energy that is NOT crying (door slam, clapping, adult speech, domestic noise)
             event_class = "HIGH_SOUND_ACTIVITY"
@@ -112,28 +113,40 @@ class MonitorService:
         rather than creating hundreds of duplicate event rows.
         Upgrades event to POSSIBLE_CRYING if infant vocalization is detected.
         """
-        recent_threshold = current_time - timedelta(seconds=8)
+        recent_threshold = current_time - timedelta(seconds=10)
+        # Check for ANY active ongoing event for this device (within 10s)
         active_event = (
             db.query(CryingEvent)
             .filter(
                 CryingEvent.device_id == device_id,
                 CryingEvent.end_time >= recent_threshold,
-                CryingEvent.classification == classification
+                CryingEvent.acknowledged == False
             )
-            .order_by(desc(CryingEvent.start_time))
+            .order_by(desc(CryingEvent.end_time))
             .first()
         )
 
         if active_event:
-            # Update existing event duration for same classification
-            active_event.end_time = current_time
-            active_event.confidence = max(active_event.confidence, confidence)
+            # If active event is already crying, preserve crying classification across brief pauses
+            if active_event.classification == "POSSIBLE_CRYING":
+                active_event.end_time = current_time
+                active_event.confidence = max(active_event.confidence, confidence)
+            elif classification == "POSSIBLE_CRYING":
+                # Upgrade existing HIGH_SOUND_ACTIVITY to confirmed infant crying!
+                active_event.classification = "POSSIBLE_CRYING"
+                active_event.end_time = current_time
+                active_event.confidence = max(active_event.confidence, confidence)
+            else:
+                # Both are HIGH_SOUND_ACTIVITY: extend duration
+                active_event.end_time = current_time
+                active_event.confidence = max(active_event.confidence, confidence)
+
             start = to_utc(active_event.start_time)
             curr = to_utc(current_time)
             if start and curr:
                 active_event.duration_seconds = max(1.0, (curr - start).total_seconds())
         else:
-            # Create a separate new event (e.g. HIGH_SOUND_ACTIVITY or POSSIBLE_CRYING)
+            # Create a separate new event
             new_event = CryingEvent(
                 device_id=device_id,
                 start_time=current_time,

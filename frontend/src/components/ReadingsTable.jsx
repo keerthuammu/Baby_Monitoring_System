@@ -43,14 +43,7 @@ export default function ReadingsTable({ readings, events, isOnline }) {
             </thead>
             <tbody className="divide-y divide-slate-800/60 text-slate-300">
               {displayedReadings.map((r) => {
-                const rTime = new Date(r.recorded_at).getTime();
-                const isDuringCryEvent = cryingEvents.some(e => {
-                  const startTime = new Date(e.start_time).getTime() - 3000;
-                  const endTime = new Date(e.end_time || e.start_time).getTime() + 4000;
-                  return rTime >= startTime && rTime <= endTime;
-                });
-
-                const isEdgeCry = (r.classification || '').toUpperCase().includes('CRYING') || isDuringCryEvent;
+                const isEdgeCry = (r.classification || '').toUpperCase().includes('CRYING');
 
                 // Feature A: Sound Intensity (Decoupled Volume Level)
                 let intensityLabel = "Low Sound";

@@ -30,10 +30,18 @@ def get_audio_classification_status(db: Session = Depends(get_db)):
     3. UNCERTAIN
     4. AUDIO UNAVAILABLE
     """
-    now = datetime.now(timezone.utc)
-    recent_threshold = now - timedelta(seconds=15)
+    # Priority 1: Direct neural classifier stream status (Google YAMNet)
+    classifier = YamnetClassifier.get_instance()
+    status_data = classifier.get_current_status(staleness_seconds=6.0)
 
-    # Priority 1: Check for active crying event in database (from either neural YAMNet or edge acoustic pitch)
+    if status_data.get("is_fresh"):
+        status_data["engine"] = "Google YAMNet ONNX"
+        return status_data
+
+    # Priority 2: Fallback to recent crying incident in database if stream paused within last 6 seconds
+    now = datetime.now(timezone.utc)
+    recent_threshold = now - timedelta(seconds=6)
+
     recent_cry = (
         db.query(CryingEvent)
         .filter(
@@ -57,23 +65,14 @@ def get_audio_classification_status(db: Session = Depends(get_db)):
             "confidence": conf_val,
             "status": "ACTIVE",
             "is_fresh": True,
-            "engine": "Google YAMNet ONNX & Acoustic Pitch",
+            "engine": "Acoustic Incident Monitor",
             "source": "crying_incident_monitor",
             "seconds_since_update": secs_ago,
             "last_update": recent_cry.end_time.isoformat() if recent_cry.end_time else now.isoformat(),
             "top_classes": [
-                {"class_name": "Baby cry, infant cry", "score": conf_val},
-                {"class_name": "Crying, sobbing", "score": round(conf_val * 0.9, 2)}
+                {"class_name": "Baby cry, infant cry", "score": conf_val}
             ]
         }
-
-    # Priority 2: Direct classifier stream status
-    classifier = YamnetClassifier.get_instance()
-    status_data = classifier.get_current_status(staleness_seconds=6.0)
-
-    if status_data.get("is_fresh"):
-        status_data["engine"] = "Google YAMNet ONNX"
-        return status_data
 
     # Guard: If no fresh audio arrived in last 6 seconds, report AUDIO UNAVAILABLE
     return {

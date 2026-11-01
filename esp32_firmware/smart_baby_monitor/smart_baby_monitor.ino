@@ -434,13 +434,13 @@ void loop() {
       const char* classification = "QUIET";
       float confidence = 0.85f;
 
-      bool isCryPitch = (pitch >= 280.0f && pitch <= 750.0f) && (periodicity >= 0.22f);
+      bool isCryPitch = (pitch >= 380.0f && pitch <= 680.0f) && (periodicity >= 0.35f);
 
-      if (isCryPitch && soundLevel >= 48.0f) {
+      if (isCryPitch && soundLevel >= 52.0f) {
         // Infant crying pitch confirmed in vocal frequency band
         babyStatus = "🚨 BABY IS CRYING";
         classification = "POSSIBLE_CRYING";
-        confidence = 0.92f;
+        confidence = 0.90f;
         Serial.printf("[ACOUSTIC PITCH] Infant crying frequency detected: %.1f Hz (periodicity: %.2f)\n", pitch, periodicity);
       } else if (soundLevel >= 65.0f) {
         // High non-crying sound (door slam, loud conversation, clapping, domestic noise)

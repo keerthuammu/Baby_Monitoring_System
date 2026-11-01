@@ -45,44 +45,37 @@ export default function MetricCards({
     lastUpdated: audioStatus?.last_update ? new Date(audioStatus.last_update).toLocaleTimeString() : null
   };
 
+  const isAudioFresh = isOnline && audioStatus && audioStatus.is_fresh;
+  const rawClass = (audioStatus?.classification || "").toUpperCase();
+  const rawCode = (audioStatus?.code || "").toUpperCase();
+  const isAudioCry = rawClass.includes("CRYING") || rawCode.includes("CRYING");
+
   const eventTime = latestEvent?.end_time || latestEvent?.start_time || latestEvent?.created_at;
-  const isEventRecent = eventTime && (Date.now() - new Date(eventTime).getTime() < 18000);
+  const isEventRecent = eventTime && (Date.now() - new Date(eventTime).getTime() < 6000);
   const evtClass = latestEvent ? (latestEvent.classification || "").toUpperCase() : "";
   const isRecentCryEvent = isEventRecent && !latestEvent.acknowledged && (evtClass.includes("CRYING") || evtClass.includes("POSSIBLE_CRYING"));
 
   const readingClass = (latestReading?.classification || "").toUpperCase();
   const isReadingCry = readingClass.includes("CRYING") || readingClass.includes("POSSIBLE_CRYING");
 
-  const isAudioFresh = isOnline && audioStatus && audioStatus.is_fresh;
-  const rawClass = (audioStatus?.classification || "").toUpperCase();
-  const rawCode = (audioStatus?.code || "").toUpperCase();
-  const isAudioCry = rawClass.includes("CRYING") || rawCode.includes("CRYING");
-
-  // Priority 1: BABY CRYING DETECTED if confirmed by YAMNet, recent acoustic event, or edge reading
-  if (isRecentCryEvent || isAudioCry || isReadingCry) {
-    const confVal = audioStatus?.confidence || latestEvent?.confidence || 0.90;
-    const confStr = `${Math.round(confVal * 100)}%`;
-    const updatedTime = audioStatus?.last_update 
-      ? new Date(audioStatus.last_update).toLocaleTimeString() 
-      : (latestEvent?.created_at ? new Date(latestEvent.created_at).toLocaleTimeString() : new Date().toLocaleTimeString());
-
-    classificationBadge = {
-      label: "BABY CRYING DETECTED",
-      code: "BABY_CRYING_DETECTED",
-      color: "bg-rose-500/20 text-rose-400 border-rose-500/40 animate-pulse",
-      dotColor: "bg-rose-500",
-      confidence: confStr,
-      desc: "Acoustic signature matches infant crying distress pattern",
-      isLive: true,
-      engine: isAudioCry ? "Google YAMNet ONNX (Active)" : "Acoustic Pitch Monitor (Active)",
-      lastUpdated: updatedTime
-    };
-  } else if (isAudioFresh) {
+  if (isAudioFresh) {
     const confVal = audioStatus.confidence ? Math.round(audioStatus.confidence * 100) : 0;
     const confStr = confVal > 0 ? `${confVal}%` : "88%";
     const updatedTime = audioStatus.last_update ? new Date(audioStatus.last_update).toLocaleTimeString() : new Date().toLocaleTimeString();
 
-    if (rawClass.includes("UNCERTAIN") || rawCode.includes("UNCERTAIN")) {
+    if (isAudioCry) {
+      classificationBadge = {
+        label: "BABY CRYING DETECTED",
+        code: "BABY_CRYING_DETECTED",
+        color: "bg-rose-500/20 text-rose-400 border-rose-500/40 animate-pulse",
+        dotColor: "bg-rose-500",
+        confidence: confStr,
+        desc: "Acoustic signature matches infant crying distress pattern",
+        isLive: true,
+        engine: "Google YAMNet ONNX (Active)",
+        lastUpdated: updatedTime
+      };
+    } else if (rawClass.includes("UNCERTAIN") || rawCode.includes("UNCERTAIN")) {
       classificationBadge = {
         label: "UNCERTAIN",
         code: "UNCERTAIN",
@@ -107,6 +100,22 @@ export default function MetricCards({
         lastUpdated: updatedTime
       };
     }
+  } else if (isRecentCryEvent || isReadingCry) {
+    const confVal = latestEvent?.confidence || 0.90;
+    const confStr = `${Math.round(confVal * 100)}%`;
+    const updatedTime = latestEvent?.created_at ? new Date(latestEvent.created_at).toLocaleTimeString() : new Date().toLocaleTimeString();
+
+    classificationBadge = {
+      label: "BABY CRYING DETECTED",
+      code: "BABY_CRYING_DETECTED",
+      color: "bg-rose-500/20 text-rose-400 border-rose-500/40 animate-pulse",
+      dotColor: "bg-rose-500",
+      confidence: confStr,
+      desc: "Acoustic signature matches infant crying distress pattern",
+      isLive: true,
+      engine: "Acoustic Pitch Monitor (Active)",
+      lastUpdated: updatedTime
+    };
   } else if (isOnline) {
     // 2b. Telemetry acoustic classification fallback when hardware is connected and transmitting
     classificationBadge = {
