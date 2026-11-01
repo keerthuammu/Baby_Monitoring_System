@@ -373,7 +373,8 @@ void loop() {
 
     for (int i = 0; i < samples_read; i++) {
       // INMP441 provides 24-bit audio in high bits of 32-bit slot
-      int32_t sample = raw_samples[i] >> 14;
+      // Shift >> 12 (4x gain boost) ensures clear dynamic range for acoustic playback and nursery distance
+      int32_t sample = raw_samples[i] >> 12;
       int32_t abs_sample = abs(sample);
 
       if (abs_sample > windowPeak) {

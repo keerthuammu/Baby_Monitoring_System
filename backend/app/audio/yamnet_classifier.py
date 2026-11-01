@@ -117,13 +117,21 @@ class YamnetClassifier:
             pad_len = 15600 - len(signal)
             signal = np.pad(signal, (0, pad_len), mode="constant")
 
-        # Calculate standard physical sound metrics (dB & RMS)
+        # Calculate standard physical sound metrics (dB & RMS) on raw acoustic signal
         rms = float(np.sqrt(np.mean(signal ** 2)))
         sound_level_db = round(float(20.0 * np.log10(rms * 32768.0)) if rms > 1e-5 else 0.0, 1)
         peak_amp = int(max_val * 32768) if max_val <= 1.0 else int(max_val)
 
+        # Dynamic Range Normalization (AGC) for YAMNet Neural Input
+        # YAMNet was trained on audio normalized across standard dynamic range.
+        # If signal is non-silent (peak > 0.005) but quiet, scale it so neural features aren't suppressed.
+        inference_signal = signal.copy()
+        if max_val > 0.005 and max_val < 0.50:
+            gain = min(0.50 / max_val, 10.0)
+            inference_signal = inference_signal * gain
+
         # Run YAMNet inference locally
-        outputs = self.session.run(None, {self.input_name: signal})
+        outputs = self.session.run(None, {self.input_name: inference_signal})
         scores = outputs[0]  # Shape: [num_frames, 521]
 
         # Average prediction scores across frames
