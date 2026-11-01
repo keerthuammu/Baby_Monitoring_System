@@ -129,16 +129,14 @@ void setupI2S() {
   Serial.println("[OK] INMP441 I2S Microphone configured successfully.");
 }
 
-// Connect to Wi-Fi non-blockingly
+// Connect to Wi-Fi robustly
 void checkWifiConnection() {
   if (WiFi.status() == WL_CONNECTED) {
     if (!wifiConnected) {
       wifiConnected = true;
       Serial.println("\n----------------------------------------");
-      Serial.print("[WIFI] Connected! Assigned IP: ");
-      Serial.println(WiFi.localIP());
-      Serial.print("[WIFI] Target Backend: ");
-      Serial.println(BACKEND_URL);
+      Serial.printf("[WIFI] Connected! Assigned IP: %s\n", WiFi.localIP().toString().c_str());
+      Serial.printf("[WIFI] Target Backend: %s\n", BACKEND_URL);
       Serial.println("----------------------------------------");
     }
     return;
@@ -146,12 +144,10 @@ void checkWifiConnection() {
 
   wifiConnected = false;
   unsigned long now = millis();
-  if (now - lastWifiRetryTime > 10000) {
+  // Retry periodically if connection dropped, without aborting active handshake
+  if (now - lastWifiRetryTime > 20000) {
     lastWifiRetryTime = now;
-    Serial.print("[WIFI] Connecting to SSID: ");
-    Serial.println(WIFI_SSID);
-    WiFi.disconnect();
-    WiFi.mode(WIFI_STA);
+    Serial.printf("[WIFI] Attempting connection to SSID: '%s'...\n", WIFI_SSID);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   }
 }
@@ -338,8 +334,27 @@ void setup() {
   setupI2S();
 
   // 2. Begin Wi-Fi Connection
+  Serial.printf("[WIFI] Connecting to '%s'", WIFI_SSID);
   WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 14) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiConnected = true;
+    Serial.println("\n----------------------------------------");
+    Serial.printf("[WIFI] Connected! Assigned IP: %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("[WIFI] Target Backend: %s\n", BACKEND_URL);
+    Serial.println("----------------------------------------");
+  } else {
+    Serial.println("\n[WIFI] Initial handshake pending. Continuing in background...");
+  }
   lastWifiRetryTime = millis();
 }
 
