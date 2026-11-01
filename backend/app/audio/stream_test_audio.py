@@ -18,7 +18,9 @@ from app.audio.evaluate_benchmark import load_wav_as_16k_mono
 
 DATASET_DIR = os.path.join(os.path.dirname(__file__), "benchmark_dataset", "positive_crying")
 
-def stream_audio(wav_filename="1-211527-A-20.wav", target_url="http://localhost:8000/api/audio/test-classify"):
+def stream_audio(wav_filename="1-211527-A-20.wav", target_url=None):
+    if target_url is None:
+        target_url = os.environ.get("STREAM_TARGET_URL", "https://baby-monitor-backend-8m8o.onrender.com/api/audio/test-classify")
     filepath = os.path.join(DATASET_DIR, wav_filename) if not os.path.exists(wav_filename) else wav_filename
     if not os.path.exists(filepath):
         print(f"[ERROR] File not found: {filepath}")

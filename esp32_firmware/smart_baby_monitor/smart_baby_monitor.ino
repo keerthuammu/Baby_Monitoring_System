@@ -36,16 +36,14 @@
 // 1. NETWORK & BACKEND CONFIGURATION
 // ==========================================
 // Enter your 2.4 GHz Wi-Fi credentials:
-const char* WIFI_SSID     = "Nothing Phone 3a";
-const char* WIFI_PASSWORD = "Keerthuammu29@";
+const char* WIFI_SSID     = "moto g64 5G";
+const char* WIFI_PASSWORD = "abhilashkk";
 
-// Target Ingestion Endpoint (Local Wi-Fi FastAPI Backend):
-// Current PC IP on Nothing Phone 3a network:
-const char* LOCAL_BACKEND_HOST = "10.45.102.178:8000";
-const char* BACKEND_URL        = "http://10.45.102.178:8000/api/readings";
+// Target Ingestion Endpoint (Render Cloud Backend):
+const char* BACKEND_URL        = "https://baby-monitor-backend-8m8o.onrender.com/api/readings";
 
-// Audio Classification Endpoint (Local YAMNet ONNX Classification Service):
-const char* AUDIO_CLASSIFY_URL = "http://10.45.102.178:8000/api/audio/classify";
+// Audio Classification Endpoint (Render Cloud YAMNet ONNX Classification Service):
+const char* AUDIO_CLASSIFY_URL = "https://baby-monitor-backend-8m8o.onrender.com/api/audio/classify";
 
 // Security API Key (must match API_KEY in backend/.env):
 const char* API_KEY            = "baby_monitor_device_secret_key_123";
