@@ -444,11 +444,13 @@ void loop() {
       }
 
       if (isCryPitch && soundLevel >= 48.0f) {
+        babyStatus = "POSSIBLE INFANT CRY (Awaiting YAMNet consensus)";
+        classification = "POSSIBLE_CRYING";
         Serial.printf("[ACOUSTIC PITCH] Supporting infant vocal pitch detected: %.1f Hz (periodicity: %.2f)\n", pitch, periodicity);
       }
 
-      // Explicit Serial Monitor output: Clearly separates Volume from Baby Status
-      Serial.printf("[SOUND] Level: %5.1f dB | Intensity: [%s] | Baby Classification: [%s] | Pitch: %.0f Hz\n",
+      // Explicit Serial Monitor output: Clearly shows Volume, Edge Acoustic Status, and Pitch
+      Serial.printf("[SOUND] Level: %5.1f dB | Intensity: [%s] | Edge Status: [%s] | Pitch: %.0f Hz\n",
                     soundLevel, intensity, babyStatus, pitch);
 
       // Transmit telemetry to FastAPI backend
