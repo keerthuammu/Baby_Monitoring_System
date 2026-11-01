@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     SOUND_HIGH_THRESHOLD: float = 65.0
     CRYING_CONFIDENCE_THRESHOLD: float = 0.70
     AUDIO_RETENTION_DAYS: int = 7
+    
+    # Cloud Synchronization
+    ENABLE_CLOUD_FORWARDING: bool = True
+    CLOUD_BACKEND_URL: str = "https://baby-monitor-backend-8m8o.onrender.com"
 
     @field_validator("DATABASE_URL", mode="before")
     @classmethod

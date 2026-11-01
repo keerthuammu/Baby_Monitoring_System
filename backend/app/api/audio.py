@@ -3,13 +3,14 @@ import wave
 from datetime import datetime, timezone
 import numpy as np
 from typing import Optional
-from fastapi import APIRouter, Depends, UploadFile, File, Form, Request, HTTPException, status
+from fastapi import APIRouter, Depends, UploadFile, File, Form, Request, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from app.core.database import get_db
 from app.core.security import verify_device_api_key
 from app.audio.yamnet_classifier import YamnetClassifier
 from app.services.monitor_service import MonitorService, to_utc
+from app.services.cloud_sync import forward_reading_to_cloud
 from app.models.models import CryingEvent
 from app.schemas.schemas import ReadingCreate
 
@@ -53,6 +54,7 @@ def get_audio_classification_status(db: Session = Depends(get_db)):
 @router.post("/classify", status_code=status.HTTP_200_OK)
 async def classify_audio_sample(
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     _auth: bool = Depends(verify_device_api_key)
 ):
@@ -120,6 +122,17 @@ async def classify_audio_sample(
         classification=classification, 
         confidence=confidence
     )
+
+    # Mirror inference results to Render Cloud
+    cloud_payload = {
+        "device_id": target_device,
+        "sound_level": result["sound_level_db"],
+        "rms_amplitude": result["rms_amplitude"],
+        "peak_amplitude": result["peak_amplitude"],
+        "classification": classification,
+        "confidence": confidence
+    }
+    background_tasks.add_task(forward_reading_to_cloud, cloud_payload)
 
     return {
         "status": "success",
