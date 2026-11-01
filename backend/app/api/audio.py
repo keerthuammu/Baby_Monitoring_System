@@ -249,7 +249,10 @@ async def test_classify_audio(
         "device_id": target_device,
         "classification": classification,
         "display_label": result.get("display_label", classification),
+        "code": classification,
+        "is_baby_crying": (classification == "BABY_CRYING_DETECTED"),
         "confidence": confidence,
+        "dataset_match_score": result.get("dataset_match_score", 0.0),
         "sound_level_db": result["sound_level_db"],
         "top_classes": result.get("top_classes", []),
         "crying_score_raw": result.get("crying_score_raw", 0.0)

@@ -58,6 +58,20 @@ class YamnetClassifier:
                 self.class_names.append(row[2])
         logger.info(f"Loaded {len(self.class_names)} AudioSet class definitions.")
 
+        # Load Pre-trained Baby Crying Dataset Embedding Profiles
+        PROFILES_PATH = os.path.join(MODEL_DIR, "crying_dataset_profiles.npz")
+        self.dataset_crying_embeddings = None
+        self.crying_centroid = None
+
+        if os.path.exists(PROFILES_PATH):
+            try:
+                npz = np.load(PROFILES_PATH)
+                self.dataset_crying_embeddings = npz["pos_embs"]
+                self.crying_centroid = npz["centroid"]
+                logger.info(f"Loaded {len(self.dataset_crying_embeddings)} baby crying dataset profiles for direct microphone matching.")
+            except Exception as e:
+                logger.warning(f"Could not load crying dataset profiles: {e}")
+
         # State tracking for staleness and temporal accumulation
         self.window_history: List[Dict[str, Any]] = []
         self.active_crying_incident: bool = False
@@ -132,10 +146,23 @@ class YamnetClassifier:
 
         # Run YAMNet inference locally
         outputs = self.session.run(None, {self.input_name: inference_signal})
-        scores = outputs[0]  # Shape: [num_frames, 521]
+        scores = outputs[0]      # Shape: [num_frames, 521]
+        embeddings = outputs[1]  # Shape: [num_frames, 1024]
 
         # Average prediction scores across frames
         mean_scores = np.mean(scores, axis=0)
+
+        # Compute direct cosine similarity against the baby crying dataset
+        mean_emb = np.mean(embeddings, axis=0)
+        emb_norm = float(np.linalg.norm(mean_emb))
+        normed_emb = (mean_emb / emb_norm).astype(np.float32) if emb_norm > 1e-6 else mean_emb
+
+        dataset_match_score = 0.0
+        if self.crying_centroid is not None and self.dataset_crying_embeddings is not None:
+            dataset_sim = float(np.dot(normed_emb, self.crying_centroid))
+            sample_sims = [float(np.dot(normed_emb, pe)) for pe in self.dataset_crying_embeddings]
+            max_sample_match = max(sample_sims) if sample_sims else dataset_sim
+            dataset_match_score = float(max(dataset_sim, max_sample_match))
 
         # AudioSet Class Indices for Baby Crying and Competing Sound Classes
         # Crying classes
@@ -190,23 +217,25 @@ class YamnetClassifier:
         is_cry_in_top3 = any(c["class_name"] in CRY_CLASS_NAMES for c in top_classes[:3])
         is_cry_top1 = top_sound_name in CRY_CLASS_NAMES
 
-        # 4. Calibrated Multi-Evidence Decision Strategy (Per-Window)
+        # 4. Calibrated Dataset-Matching & Multi-Evidence Decision Strategy (Per-Window)
         high_thresh = getattr(settings, "CRY_SCORE_HIGH_THRESHOLD", 0.20)
         low_thresh = getattr(settings, "CRY_SCORE_LOW_THRESHOLD", 0.12)
 
-        # Rule A: Strong YAMNet Crying Evidence (crying is top-ranked or cumulative crying energy dominates competing sounds)
-        if (is_cry_top1 and (cry_score >= high_thresh or cry_energy >= 0.26)) or (is_cry_in_top3 and (cry_score >= 0.20 or cry_energy >= 0.26) and cry_energy >= 0.7 * top_sound_score):
+        # Rule A: Microphone input directly matches baby crying dataset (>= 0.72 match and crying acoustic evidence)
+        is_dataset_cry_match = (dataset_match_score >= 0.72) and (cry_score >= 0.08 or cry_energy >= 0.12)
+
+        # Rule B: Standard strong YAMNet crying class dominance
+        is_yamnet_strong_cry = (is_cry_top1 and (cry_score >= high_thresh or cry_energy >= 0.26)) or (is_cry_in_top3 and (cry_score >= 0.20 or cry_energy >= 0.26) and cry_energy >= 0.7 * top_sound_score)
+
+        # Rule C: Supporting infant vocal pitch
+        is_pitch_cry = is_cry_in_top3 and (cry_score >= low_thresh or cry_energy >= 0.16) and has_infant_pitch and (cry_energy >= 0.5 * top_sound_score)
+
+        if is_dataset_cry_match or is_yamnet_strong_cry or is_pitch_cry:
             raw_code = "BABY_CRYING_DETECTED"
-            raw_confidence = float(np.clip(0.72 + 0.28 * max(cry_score, cry_energy * 0.5), 0.75, 0.98))
-        # Rule B: Moderate YAMNet Crying in Top 3 with Supporting Infant Vocal Pitch (380 - 680 Hz)
-        elif is_cry_in_top3 and (cry_score >= low_thresh or cry_energy >= 0.16) and has_infant_pitch and (cry_energy >= 0.5 * top_sound_score):
-            raw_code = "BABY_CRYING_DETECTED"
-            raw_confidence = float(np.clip(0.68 + 0.22 * cry_score + 0.10 * periodicity, 0.72, 0.92))
-        # Rule C: Ambiguous / Borderline Evidence (crying present but weak or conflicting)
-        elif is_cry_in_top3 and (cry_score >= 0.08 or cry_energy >= 0.12):
+            raw_confidence = float(np.clip(max(dataset_match_score, 0.75 + 0.25 * cry_score), 0.78, 0.98))
+        elif is_cry_in_top3 and (cry_score >= 0.08 or cry_energy >= 0.12 or dataset_match_score >= 0.65):
             raw_code = "UNCERTAIN"
-            raw_confidence = round(max(cry_score, cry_energy * 0.5), 2)
-        # Rule D: Definite Non-Crying Sound (Adult speech, conversation, music, clapping, doors, alarms, ambient)
+            raw_confidence = round(max(cry_score, dataset_match_score * 0.8), 2)
         else:
             raw_code = "NOT_BABY_CRYING"
             raw_confidence = round(max(top_sound_score, silence_score, 0.85), 2)
@@ -257,7 +286,7 @@ class YamnetClassifier:
             recent_crying_count = recent_codes.count("BABY_CRYING_DETECTED")
 
             has_immediate_cry = (raw_code == "BABY_CRYING_DETECTED") and (
-                (is_cry_top1 and cry_score >= 0.22) or (cry_energy >= 0.28) or (has_infant_pitch and cry_score >= 0.14)
+                is_dataset_cry_match or (is_cry_top1 and cry_score >= 0.22) or (cry_energy >= 0.28) or (has_infant_pitch and cry_score >= 0.14)
             )
 
             if recent_crying_count >= attack_req or has_immediate_cry:
@@ -288,6 +317,7 @@ class YamnetClassifier:
         logger.info(
             f"[INFERENCE] Completed in {len(signal)/sample_rate:.2f}s audio | "
             f"Result: {final_label} ({final_confidence*100:.0f}%) | "
+            f"Dataset Match: {dataset_match_score*100:.0f}% | "
             f"dB: {sound_level_db} | Top: {top_classes[0]['class_name'] if top_classes else 'N/A'} | "
             f"Active Incident: {self.active_crying_incident}"
         )
@@ -296,6 +326,7 @@ class YamnetClassifier:
             "classification": final_code,
             "display_label": final_label,
             "confidence": final_confidence,
+            "dataset_match_score": round(dataset_match_score, 3),
             "sound_level_db": sound_level_db,
             "rms_amplitude": round(rms * 32768.0, 1),
             "peak_amplitude": peak_amp,
