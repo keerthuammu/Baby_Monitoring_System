@@ -51,11 +51,11 @@ const char* API_KEY            = "baby_monitor_device_secret_key_123";
 // Unique Device Identifier:
 const char* DEVICE_ID          = "esp32-nursery-01";
 
-// Transmission interval in milliseconds (1000 ms for responsive real-time dashboard):
-const unsigned long TRANSMIT_INTERVAL_MS = 1000;
+// Transmission interval in milliseconds (2500 ms prevents Cloudflare DDoS rate-limit 429):
+const unsigned long TRANSMIT_INTERVAL_MS = 2500;
 
-// Audio classification chunk interval (1200 ms for rapid neural inference):
-const unsigned long AUDIO_CHUNK_INTERVAL_MS = 1200;
+// Audio classification chunk interval (3000 ms for stable neural audio chunks):
+const unsigned long AUDIO_CHUNK_INTERVAL_MS = 3000;
 
 // ==========================================
 // 2. I2S MICROPHONE CONFIGURATION
@@ -252,7 +252,7 @@ void sendTelemetryToBackend(float soundLevel, float rms, int peak, const char* c
 
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-API-Key", API_KEY);
-  http.addHeader("User-Agent", "ESP32-BabyMonitor/1.0");
+  http.addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
 
   // Construct JSON payload with classification & pitch
   char jsonBuffer[384];
@@ -316,6 +316,7 @@ void sendAudioChunkToBackend() {
   http.addHeader("Content-Type", "application/octet-stream");
   http.addHeader("X-API-Key", API_KEY);
   http.addHeader("X-Device-Id", DEVICE_ID);
+  http.addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
 
   int httpCode = http.POST((uint8_t*)audioBuffer, audioBufferIdx * sizeof(int16_t));
   if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_CREATED) {
