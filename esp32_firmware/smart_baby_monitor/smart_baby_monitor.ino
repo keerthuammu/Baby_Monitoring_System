@@ -272,7 +272,11 @@ void sendTelemetryToBackend(float soundLevel, float rms, int peak, const char* c
     String resp = http.getString();
     Serial.printf("[HTTP ERROR %d] %s\n", httpCode, resp.c_str());
   } else {
-    Serial.printf("[HTTP FAILED] Connection failed (%s). Check Wi-Fi connection.\n", http.errorToString(httpCode).c_str());
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.printf("[HTTP FAILED] Target backend refused or unreachable (%s) at %s\n", http.errorToString(httpCode).c_str(), BACKEND_URL);
+    } else {
+      Serial.println("[HTTP FAILED] Wi-Fi disconnected. Reconnecting to hotspot...");
+    }
   }
 
   http.end();
