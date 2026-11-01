@@ -11,7 +11,7 @@ import {
 } from 'recharts';
 import { Activity, Info } from 'lucide-react';
 
-export default function SoundChart({ readings }) {
+export default function SoundChart({ readings, isOnline }) {
   // Format readings chronological for the chart (oldest to newest)
   const chartData = [...(readings || [])]
     .reverse()
@@ -64,12 +64,16 @@ export default function SoundChart({ readings }) {
     <div className="glass-panel rounded-2xl p-5 transition-all">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-6">
         <div className="flex items-center gap-2.5">
-          <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+          <div className={`p-2 rounded-xl border ${isOnline ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20' : 'bg-slate-800/80 text-slate-500 border-slate-700/50'}`}>
             <Activity className="w-4 h-4" />
           </div>
           <div>
             <h3 className="text-base font-bold text-white tracking-tight">Sound Activity Telemetry</h3>
-            <p className="text-xs text-slate-400">Continuous acoustic decibel tracking (INMP441 Microphone)</p>
+            <p className="text-xs text-slate-400">
+              {isOnline 
+                ? "Continuous acoustic decibel tracking (INMP441 Microphone)" 
+                : "Acoustic history (Paused • Device Offline)"}
+            </p>
           </div>
         </div>
 

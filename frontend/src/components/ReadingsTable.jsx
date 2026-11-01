@@ -1,7 +1,7 @@
 import React from 'react';
 import { Database, Radio } from 'lucide-react';
 
-export default function ReadingsTable({ readings, events }) {
+export default function ReadingsTable({ readings, events, isOnline }) {
   const displayedReadings = (readings || []).slice(0, 15);
   const cryingEvents = (events || []).filter(e => e.classification === 'POSSIBLE_CRYING');
 
@@ -9,12 +9,14 @@ export default function ReadingsTable({ readings, events }) {
     <div className="glass-panel rounded-2xl p-5 transition-all">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2.5">
-          <div className="p-2 rounded-xl bg-violet-500/10 text-violet-400 border border-violet-500/20">
+          <div className={`p-2 rounded-xl border ${isOnline ? 'bg-violet-500/10 text-violet-400 border-violet-500/20' : 'bg-slate-800/80 text-slate-500 border-slate-700/50'}`}>
             <Radio className="w-4 h-4" />
           </div>
           <div>
             <h3 className="text-base font-bold text-white tracking-tight">Recent Telemetry Stream</h3>
-            <p className="text-xs text-slate-400">Raw acoustic packets received from ESP32 IoT node</p>
+            <p className="text-xs text-slate-400">
+              {isOnline ? "Raw acoustic packets received from ESP32 IoT node" : "Last recorded packets (Device Offline)"}
+            </p>
           </div>
         </div>
         <span className="text-[11px] font-mono text-slate-500">

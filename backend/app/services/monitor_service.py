@@ -170,10 +170,10 @@ class MonitorService:
     def get_devices(db: Session) -> List[Device]:
         now = utc_now()
         devices = db.query(Device).all()
-        # Mark as OFFLINE if no heartbeat in last 30 seconds
+        # Mark as OFFLINE if no heartbeat in last 10 seconds
         for d in devices:
             last_seen = to_utc(d.last_seen_at)
-            if last_seen and (now - last_seen).total_seconds() > 30:
+            if last_seen and (now - last_seen).total_seconds() > 10:
                 if d.connection_status != "OFFLINE":
                     d.connection_status = "OFFLINE"
                     db.commit()
@@ -191,11 +191,11 @@ class MonitorService:
         devices = MonitorService.get_devices(db)
         active_devices = [d for d in devices if d.connection_status == "ONLINE"]
 
-        # Also check if latest sensor reading arrived within last 30 seconds
+        # Also check if latest sensor reading arrived within last 10 seconds
         is_fresh_reading = False
         if latest_reading:
             reading_time = to_utc(latest_reading.received_at or latest_reading.recorded_at)
-            if reading_time and (now - reading_time).total_seconds() <= 30:
+            if reading_time and (now - reading_time).total_seconds() <= 10:
                 is_fresh_reading = True
 
         status_str = "ONLINE" if (active_devices or is_fresh_reading) else "OFFLINE"

@@ -98,8 +98,12 @@ export default function App() {
     }
   };
 
-  const isOnline = stats?.device_status === 'ONLINE';
   const latestReading = readings.length > 0 ? readings[0] : null;
+  // Hardware freshness guard: device is actively streaming if a packet arrived within the last 10 seconds
+  const isReadingFresh = latestReading?.recorded_at 
+    ? (Date.now() - new Date(latestReading.recorded_at).getTime() < 10000)
+    : false;
+  const isOnline = Boolean(stats?.device_status === 'ONLINE' && isReadingFresh);
   const activeAlert = events.find(e => !e.acknowledged);
 
   return (
@@ -152,7 +156,7 @@ export default function App() {
 
 
         {/* Real-time Telemetry Line Chart */}
-        <SoundChart readings={readings} />
+        <SoundChart readings={readings} isOnline={isOnline} />
 
         {/* Dual Grid for Event Log & Packet Stream */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -161,7 +165,7 @@ export default function App() {
             onAcknowledge={handleAcknowledge}
             isAcknowledging={isAcknowledging}
           />
-          <ReadingsTable readings={readings} events={events} />
+          <ReadingsTable readings={readings} events={events} isOnline={isOnline} />
         </div>
 
       </main>
