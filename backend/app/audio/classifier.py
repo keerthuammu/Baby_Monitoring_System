@@ -23,11 +23,11 @@ class AcousticClassifier:
     Designed for real-time edge/backend inference without heavy GPU dependencies.
     """
 
-    # Empirical infant cry acoustic parameters:
-    CRY_PITCH_MIN_HZ = 300.0
-    CRY_PITCH_MAX_HZ = 720.0
-    CRY_BAND_ENERGY_MIN = 0.35
-    CRY_DECIBEL_MIN = 42.0
+    # Empirical infant cry acoustic parameters (covers infant cry & phone speaker harmonics):
+    CRY_PITCH_MIN_HZ = 240.0
+    CRY_PITCH_MAX_HZ = 750.0
+    CRY_BAND_ENERGY_MIN = 0.30
+    CRY_DECIBEL_MIN = 40.0
 
     @classmethod
     def classify_waveform(cls, signal: np.ndarray, sample_rate: int = 16000) -> Dict[str, Any]:

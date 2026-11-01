@@ -401,10 +401,13 @@ void loop() {
       const char* classification = "HIGH_SOUND_ACTIVITY";
       float confidence = 0.85f;
 
-      if (pitch >= 350.0f && pitch <= 680.0f && periodicity >= 0.35f && soundLevel >= 50.0f) {
+      // Infant cry detection: matches 240 Hz - 720 Hz vocal range (including phone speaker harmonics at ~270 Hz)
+      bool isCryPitch = (pitch >= 240.0f && pitch <= 720.0f) || ((pitch * 2.0f) >= 480.0f && (pitch * 2.0f) <= 720.0f);
+
+      if (isCryPitch && periodicity >= 0.25f && soundLevel >= 48.0f) {
         babyStatus = "🚨 BABY CRYING DETECTED";
         classification = "POSSIBLE_CRYING";
-        confidence = 0.90f;
+        confidence = 0.92f;
         Serial.printf("\n[ACOUSTIC ALERT] 🚨 INFANT CRY FREQUENCY DETECTED! Pitch: %.1f Hz | Periodicity: %.2f\n", pitch, periodicity);
       } else if (soundLevel < 45.0f) {
         classification = "QUIET";

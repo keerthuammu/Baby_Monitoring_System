@@ -167,16 +167,17 @@ class YamnetClassifier:
             "Crying, sobbing",
             "Whimper",
             "Wail, moan",
-            "Screaming"
+            "Screaming",
+            "Child speech, kid speaking"
         }
-        any_top_cry = any(c["class_name"] in CRY_CLASS_NAMES and c["score"] >= 0.10 for c in top_classes[:3])
+        any_top_cry = any(c["class_name"] in CRY_CLASS_NAMES and c["score"] >= 0.05 for c in top_classes[:5])
 
-        # 1. BABY CRYING DETECTED: YAMNet AudioSet cry >= 0.20 OR top cry class OR physical infant cry profile
-        if (smoothed_cry_score >= 0.20 and sound_level_db >= 38.0) or any_top_cry or (acoustic_class == "POSSIBLE_CRYING"):
+        # 1. BABY CRYING DETECTED: YAMNet cry score >= 0.08 OR top 5 cry class match OR acoustic harmonic match
+        if (smoothed_cry_score >= 0.08 and sound_level_db >= 38.0) or any_top_cry or (acoustic_class == "POSSIBLE_CRYING"):
             code = "BABY_CRYING_DETECTED"
             display_label = "BABY CRYING DETECTED"
             confidence = max(round(smoothed_cry_score, 2), round(acoustic_conf, 2), 0.88)
-        elif smoothed_cry_score >= 0.10:
+        elif smoothed_cry_score >= 0.04:
             # Borderline / ambiguous crying signal
             code = "UNCERTAIN"
             display_label = "UNCERTAIN"
