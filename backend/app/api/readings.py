@@ -24,21 +24,8 @@ def submit_reading(
     """
     reading = MonitorService.record_reading(
         db,
-        reading_in,
-        classification=reading_in.classification,
-        confidence=reading_in.confidence
+        reading_in
     )
-    
-    # If reading carries verified crying evidence, synchronize YAMNet status cache
-    if reading_in.classification in ["BABY_CRYING_DETECTED", "POSSIBLE_CRYING"]:
-        from app.audio.yamnet_classifier import YamnetClassifier
-        from datetime import datetime, timezone
-        classifier = YamnetClassifier.get_instance()
-        classifier.last_classification = "BABY CRYING DETECTED"
-        classifier.last_code = "BABY_CRYING_DETECTED"
-        classifier.last_confidence = reading_in.confidence or 0.88
-        classifier.last_update_time = datetime.now(timezone.utc)
-        classifier.active_crying_incident = True
 
     # Asynchronously mirror telemetry to Render without blocking ESP32 response
     payload = reading_in.model_dump(mode="json")

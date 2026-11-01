@@ -105,9 +105,9 @@ export default function MetricCards({
     }
   } else if (isOnline) {
     // 2b. Telemetry acoustic classification fallback when hardware is connected and transmitting
-    // An event must be RECENT (within 15 seconds) to affect the live status badge
-    const eventTime = latestEvent?.end_time || latestEvent?.start_time || latestEvent?.created_at;
-    const isEventRecent = eventTime && (Date.now() - new Date(eventTime).getTime() < 15000);
+    // An event must have STARTED RECENTLY (within 12 seconds) to affect the live status badge
+    const eventStartTime = latestEvent?.start_time || latestEvent?.created_at;
+    const isEventRecent = eventStartTime && (Date.now() - new Date(eventStartTime).getTime() < 12000);
     const evtClass = latestEvent ? (latestEvent.classification || "").toUpperCase() : "";
     const isRecentCryEvent = isEventRecent && !latestEvent.acknowledged && (evtClass.includes("CRYING") || evtClass.includes("POSSIBLE_CRYING"));
 
