@@ -186,18 +186,18 @@ class YamnetClassifier:
         high_thresh = getattr(settings, "CRY_SCORE_HIGH_THRESHOLD", 0.20)
         low_thresh = getattr(settings, "CRY_SCORE_LOW_THRESHOLD", 0.12)
 
-        # Rule A: Strong YAMNet Crying Evidence (crying is top-ranked and dominates competing sounds)
-        if (is_cry_top1 and cry_score >= high_thresh) or (is_cry_in_top3 and cry_score >= 0.25 and cry_score >= 0.6 * top_sound_score):
+        # Rule A: Strong YAMNet Crying Evidence (crying is top-ranked or cumulative crying energy dominates competing sounds)
+        if (is_cry_top1 and (cry_score >= high_thresh or cry_energy >= 0.26)) or (is_cry_in_top3 and (cry_score >= 0.20 or cry_energy >= 0.26) and cry_energy >= 0.7 * top_sound_score):
             raw_code = "BABY_CRYING_DETECTED"
             raw_confidence = float(np.clip(0.72 + 0.28 * max(cry_score, cry_energy * 0.5), 0.75, 0.98))
         # Rule B: Moderate YAMNet Crying in Top 3 with Supporting Infant Vocal Pitch (380 - 680 Hz)
-        elif is_cry_in_top3 and (cry_score >= low_thresh) and has_infant_pitch and (cry_score >= 0.45 * top_sound_score):
+        elif is_cry_in_top3 and (cry_score >= low_thresh or cry_energy >= 0.16) and has_infant_pitch and (cry_energy >= 0.5 * top_sound_score):
             raw_code = "BABY_CRYING_DETECTED"
             raw_confidence = float(np.clip(0.68 + 0.22 * cry_score + 0.10 * periodicity, 0.72, 0.92))
         # Rule C: Ambiguous / Borderline Evidence (crying present but weak or conflicting)
-        elif is_cry_in_top3 and cry_score >= 0.08:
+        elif is_cry_in_top3 and (cry_score >= 0.08 or cry_energy >= 0.12):
             raw_code = "UNCERTAIN"
-            raw_confidence = round(cry_score, 2)
+            raw_confidence = round(max(cry_score, cry_energy * 0.5), 2)
         # Rule D: Definite Non-Crying Sound (Adult speech, conversation, music, clapping, doors, alarms, ambient)
         else:
             raw_code = "NOT_BABY_CRYING"
@@ -249,7 +249,7 @@ class YamnetClassifier:
             recent_crying_count = recent_codes.count("BABY_CRYING_DETECTED")
 
             has_immediate_cry = (raw_code == "BABY_CRYING_DETECTED") and (
-                (is_cry_top1 and cry_score >= 0.25) or (has_infant_pitch and cry_score >= 0.16)
+                (is_cry_top1 and cry_score >= 0.22) or (cry_energy >= 0.28) or (has_infant_pitch and cry_score >= 0.14)
             )
 
             if recent_crying_count >= attack_req or has_immediate_cry:
