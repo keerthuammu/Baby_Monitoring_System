@@ -67,10 +67,12 @@ class MonitorService:
         detected_class = classification or reading_in.classification
         detected_conf = confidence if confidence is not None else reading_in.confidence
 
+        # Authoritative crying events must strictly originate from YAMNet inference in api/audio.py
+        # Edge readings without model inference can only trigger HIGH_SOUND_ACTIVITY.
+        is_model_verified_crying = (classification == "BABY_CRYING_DETECTED")
         is_high_sound = reading_in.sound_level >= settings.SOUND_HIGH_THRESHOLD
-        is_crying_detected = detected_class in ["POSSIBLE_CRYING", "BABY_CRYING_DETECTED"]
 
-        if is_crying_detected:
+        if is_model_verified_crying:
             # Confirmed crying evidence from authoritative YAMNet inference
             event_class = "POSSIBLE_CRYING"
             event_conf = detected_conf if detected_conf is not None else 0.88

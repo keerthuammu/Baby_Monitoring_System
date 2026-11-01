@@ -417,19 +417,16 @@ void loop() {
 
       // Feature B: Baby Sound Status & Edge Acoustic Telemetry
       // Clearly decoupled: Volume Intensity (Feature A) vs Baby Sound Classification (Feature B)
+      // YAMNet neural inference via /api/audio/classify is the sole authority for baby crying.
+      // Pitch autocorrelation is sent as supporting telemetry only.
       const char* babyStatus = "NOT BABY CRYING";
       const char* classification = "QUIET";
       float confidence = 0.85f;
 
       bool isCryPitch = (pitch >= 300.0f && pitch <= 720.0f) && (periodicity >= 0.30f);
 
-      if (isCryPitch && soundLevel >= 48.0f) {
-        babyStatus = "🚨 BABY CRYING DETECTED";
-        classification = "POSSIBLE_CRYING";
-        confidence = 0.88f;
-        Serial.printf("[ACOUSTIC ALERT] 🚨 INFANT CRY FREQUENCY DETECTED! Pitch: %.1f Hz | Periodicity: %.2f\n", pitch, periodicity);
-      } else if (soundLevel >= 65.0f) {
-        // High non-crying sound (door slam, clapping, TV, domestic noise)
+      if (soundLevel >= 65.0f) {
+        // High non-crying sound (door slam, loud conversation, clapping, domestic noise)
         classification = "HIGH_SOUND_ACTIVITY";
         babyStatus = "NOT BABY CRYING";
         confidence = 0.88f;
@@ -443,6 +440,10 @@ void loop() {
         classification = "QUIET";
         babyStatus = "NOT BABY CRYING";
         confidence = 0.95f;
+      }
+
+      if (isCryPitch && soundLevel >= 48.0f) {
+        Serial.printf("[ACOUSTIC PITCH] Supporting infant vocal pitch detected: %.1f Hz (periodicity: %.2f)\n", pitch, periodicity);
       }
 
       // Explicit Serial Monitor output: Clearly separates Volume from Baby Status

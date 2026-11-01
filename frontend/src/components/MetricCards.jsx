@@ -105,13 +105,13 @@ export default function MetricCards({
     }
   } else if (isOnline) {
     // 2b. Telemetry acoustic classification fallback when hardware is connected and transmitting
-    const hasActiveAlert = latestEvent && !latestEvent.acknowledged;
+    // An event must be RECENT (within 15 seconds) to affect the live status badge
+    const eventTime = latestEvent?.end_time || latestEvent?.start_time || latestEvent?.created_at;
+    const isEventRecent = eventTime && (Date.now() - new Date(eventTime).getTime() < 15000);
     const evtClass = latestEvent ? (latestEvent.classification || "").toUpperCase() : "";
-    const isCryEvent = hasActiveAlert && (evtClass.includes("CRYING") || evtClass.includes("POSSIBLE_CRYING"));
-    const readingClass = (latestReading?.classification || "").toUpperCase();
-    const isEdgeCry = readingClass.includes("CRYING") || readingClass.includes("POSSIBLE_CRYING");
+    const isRecentCryEvent = isEventRecent && !latestEvent.acknowledged && (evtClass.includes("CRYING") || evtClass.includes("POSSIBLE_CRYING"));
 
-    if (isCryEvent || isEdgeCry) {
+    if (isRecentCryEvent) {
       classificationBadge = {
         label: "BABY CRYING DETECTED",
         code: "BABY_CRYING_DETECTED",
@@ -130,7 +130,7 @@ export default function MetricCards({
         color: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
         dotColor: "bg-emerald-400",
         confidence: "95%",
-        desc: "Normal room sound, speech or environmental noise",
+        desc: "Non-crying audio (speech, movement, ambient)",
         isLive: true,
         engine: "Acoustic Monitor (Active)",
         lastUpdated: latestReading?.recorded_at ? new Date(latestReading.recorded_at).toLocaleTimeString() : new Date().toLocaleTimeString()
