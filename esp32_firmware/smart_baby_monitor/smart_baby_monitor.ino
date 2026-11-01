@@ -40,12 +40,12 @@ const char* WIFI_SSID     = "Nothing Phone 3a";
 const char* WIFI_PASSWORD = "Keerthuammu29@";
 
 // Target Ingestion Endpoint (Local Wi-Fi FastAPI Backend):
-// Replace 10.231.194.178 with your PC's Wi-Fi IPv4 if it changes:
-const char* LOCAL_BACKEND_HOST = "10.231.194.178:8000";
-const char* BACKEND_URL        = "http://10.231.194.178:8000/api/readings";
+// Current PC IP on Nothing Phone 3a network:
+const char* LOCAL_BACKEND_HOST = "10.45.102.178:8000";
+const char* BACKEND_URL        = "http://10.45.102.178:8000/api/readings";
 
 // Audio Classification Endpoint (Local YAMNet ONNX Classification Service):
-const char* AUDIO_CLASSIFY_URL = "http://10.231.194.178:8000/api/audio/classify";
+const char* AUDIO_CLASSIFY_URL = "http://10.45.102.178:8000/api/audio/classify";
 
 // Security API Key (must match API_KEY in backend/.env):
 const char* API_KEY            = "baby_monitor_device_secret_key_123";
