@@ -254,13 +254,15 @@ export default function LiveMicClassifier({ onTestComplete }) {
         const wavBlob = encodeWavBlob(merged, 16000);
         const serverResult = await classifyTestAudio(wavBlob);
 
-        const serverIsBaby = serverResult?.classification === "POSSIBLE_CRYING";
+        const serverIsBaby = serverResult?.classification === "POSSIBLE_CRYING" || 
+                             serverResult?.classification === "BABY_CRYING_DETECTED" ||
+                             serverResult?.is_baby_crying === true;
         const topClass = serverResult?.top_classes?.[0]?.class_name || "";
         const finalIsBaby = serverIsBaby || isBaby;
 
         setSoundClassification({
           isBaby: finalIsBaby,
-          label: finalIsBaby ? "BABY SOUND DETECTED" : (db < 38 ? "QUIET / AMBIENT" : "NOT BABY SOUND"),
+          label: finalIsBaby ? "BABY CRYING DETECTED" : (db < 38 ? "QUIET / AMBIENT" : "NOT BABY CRYING"),
           details: finalIsBaby
             ? (serverIsBaby ? `Google YAMNet: ${topClass || "Infant Cry"}` : `Infant crying pitch detected (${Math.round(pitch)} Hz)`)
             : `Classified as: ${topClass || "Non-baby sound"}`,

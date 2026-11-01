@@ -415,33 +415,39 @@ void loop() {
         intensity = "MODERATE SOUND";
       }
 
-      // Feature B: Sound Classification & Edge Acoustic Analysis
-      // YAMNet neural inference via /api/audio/classify is the primary evidence.
-      // Pitch autocorrelation is supporting acoustic telemetry only.
+      // Feature B: Baby Sound Status & Edge Acoustic Telemetry
+      // Clearly decoupled: Volume Intensity (Feature A) vs Baby Sound Classification (Feature B)
       const char* babyStatus = "NOT BABY CRYING";
       const char* classification = "QUIET";
       float confidence = 0.85f;
 
       bool isCryPitch = (pitch >= 300.0f && pitch <= 720.0f) && (periodicity >= 0.30f);
 
-      if (soundLevel >= 65.0f) {
+      if (isCryPitch && soundLevel >= 48.0f) {
+        babyStatus = "🚨 BABY CRYING DETECTED";
+        classification = "POSSIBLE_CRYING";
+        confidence = 0.88f;
+        Serial.printf("[ACOUSTIC ALERT] 🚨 INFANT CRY FREQUENCY DETECTED! Pitch: %.1f Hz | Periodicity: %.2f\n", pitch, periodicity);
+      } else if (soundLevel >= 65.0f) {
+        // High non-crying sound (door slam, clapping, TV, domestic noise)
         classification = "HIGH_SOUND_ACTIVITY";
+        babyStatus = "NOT BABY CRYING";
         confidence = 0.88f;
       } else if (soundLevel >= 45.0f) {
+        // Moderate non-crying sound (routine conversation, footsteps, movement)
         classification = "MODERATE_SOUND";
+        babyStatus = "NOT BABY CRYING";
         confidence = 0.85f;
       } else {
+        // Calm ambient room
         classification = "QUIET";
+        babyStatus = "NOT BABY CRYING";
         confidence = 0.95f;
       }
 
-      if (isCryPitch && soundLevel >= 48.0f) {
-        Serial.printf("[ACOUSTIC PITCH] Supporting infant vocal pitch detected: %.1f Hz (periodicity: %.2f)\n", pitch, periodicity);
-      }
-
       // Explicit Serial Monitor output: Clearly separates Volume from Baby Status
-      Serial.printf("[SOUND] Level: %5.1f dB | Intensity: [%s] | Pitch: %.0f Hz\n",
-                    soundLevel, intensity, pitch);
+      Serial.printf("[SOUND] Level: %5.1f dB | Intensity: [%s] | Baby Classification: [%s] | Pitch: %.0f Hz\n",
+                    soundLevel, intensity, babyStatus, pitch);
 
       // Transmit telemetry to FastAPI backend
       sendTelemetryToBackend(soundLevel, rms, windowPeak, classification, pitch, confidence);
