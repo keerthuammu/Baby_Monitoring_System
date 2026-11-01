@@ -32,3 +32,4 @@ for label, path in test_files:
     print(f"{label:<18} | {disp:<22} | {code:<22} | {conf}")
 
 print("=" * 75)
+

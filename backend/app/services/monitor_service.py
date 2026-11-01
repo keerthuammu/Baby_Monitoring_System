@@ -175,19 +175,18 @@ class MonitorService:
         pitch = getattr(reading_in, "pitch_hz", None) or 0.0
 
         # Primary authority: YAMNet neural network inference (if provided)
-        # Secondary authority: Verified infant cry pitch (380 - 680 Hz) explicitly flagged as crying by edge device
+        # Secondary authority: Verified infant cry pitch & edge episode latch
         is_yamnet_crying = (classification == "BABY_CRYING_DETECTED")
         is_yamnet_non_crying = (classification is not None and classification != "BABY_CRYING_DETECTED")
 
-        # Edge crying is only accepted if YAMNet didn't classify it as non-crying,
-        # AND edge classification explicitly claims POSSIBLE_CRYING,
-        # AND pitch is strictly in the true infant distress vocal band (380 - 680 Hz),
-        # AND sound level is elevated (>= 52 dB).
+        # Edge crying is valid when:
+        # 1. Edge explicitly flags crying episode (autocorrelation latch e.g. "POSSIBLE_CRYING"), OR
+        # 2. Pitch is within the infant distress vocal frequency range (350 - 720 Hz) with elevated sound
         is_edge_crying = (
-            not is_yamnet_non_crying and
-            ("CRYING" in detected_class) and
-            (380.0 <= pitch <= 680.0) and
-            (reading_in.sound_level >= 52.0)
+            not is_yamnet_non_crying and (
+                ("CRYING" in detected_class and reading_in.sound_level >= 45.0) or
+                (350.0 <= pitch <= 720.0 and reading_in.sound_level >= 48.0)
+            )
         )
         is_high_sound = reading_in.sound_level >= settings.SOUND_HIGH_THRESHOLD
 
@@ -195,23 +194,22 @@ class MonitorService:
         final_reading_conf = detected_conf
 
         ev = None
-        if is_yamnet_crying:
+        if is_yamnet_crying or is_edge_crying:
             final_reading_class = "BABY_CRYING_DETECTED"
-            final_reading_conf = detected_conf if detected_conf is not None else 0.96
+            final_reading_conf = detected_conf if detected_conf is not None else 0.92
             event_class = "POSSIBLE_CRYING"
             ev = MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, final_reading_conf)
-        elif is_edge_crying:
-            final_reading_class = "POSSIBLE_CRYING"
-            final_reading_conf = detected_conf if detected_conf is not None else 0.90
-            event_class = "POSSIBLE_CRYING"
-            ev = MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, final_reading_conf)
-        elif is_high_sound:
-            final_reading_class = "HIGH_SOUND_ACTIVITY"
-            final_reading_conf = detected_conf if detected_conf is not None else 0.85
-            event_class = "HIGH_SOUND_ACTIVITY"
-            ev = MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, final_reading_conf)
+        elif "UNCERTAIN" in detected_class:
+            final_reading_class = "UNCERTAIN"
+            final_reading_conf = detected_conf if detected_conf is not None else 0.70
         else:
-            final_reading_class = detected_class or "NORMAL"
+            # Sound intensity is decoupled from baby sound classification:
+            # A loud door slam / loud noise (>= 65 dB) is HIGH SOUND, but NOT BABY CRYING
+            final_reading_class = "NOT_BABY_CRYING"
+            final_reading_conf = detected_conf if detected_conf is not None else 0.88
+            if is_high_sound:
+                event_class = "HIGH_SOUND_ACTIVITY"
+                ev = MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, final_reading_conf)
 
         # Create reading with persistent classification
         reading = SensorReading(
@@ -333,42 +331,43 @@ class MonitorService:
             query = query.filter(SensorReading.device_id == device_id)
         readings = query.order_by(desc(SensorReading.recorded_at)).offset(offset).limit(limit).all()
 
-        # Seamless fallback: backfill unclassified historical packets matching active/recorded crying events
-        has_unclassified = any(r.classification is None for r in readings)
-        if has_unclassified and readings:
-            min_time = min((r.recorded_at for r in readings if r.recorded_at), default=None)
-            max_time = max((r.recorded_at for r in readings if r.recorded_at), default=None)
-            if min_time and max_time:
-                crying_events = (
-                    db.query(CryingEvent)
-                    .filter(
-                        CryingEvent.classification.ilike("%CRYING%"),
-                        CryingEvent.start_time <= max_time + timedelta(seconds=5),
-                    )
-                    .all()
+        # Seamless normalization: map every reading to authoritative standard states
+        min_time = min((r.recorded_at for r in readings if r.recorded_at), default=None)
+        max_time = max((r.recorded_at for r in readings if r.recorded_at), default=None)
+        crying_events = []
+        if min_time and max_time:
+            crying_events = (
+                db.query(CryingEvent)
+                .filter(
+                    CryingEvent.classification.ilike("%CRYING%"),
+                    CryingEvent.start_time <= max_time + timedelta(seconds=5),
                 )
-                for r in readings:
-                    if r.classification is None and r.recorded_at:
-                        r_utc = to_utc(r.recorded_at)
-                        is_during_cry = False
-                        for ev in crying_events:
-                            ev_start = to_utc(ev.start_time) - timedelta(seconds=3)
-                            ev_end = to_utc(ev.end_time or ev.start_time) + timedelta(seconds=max(3.0, (ev.duration_seconds or 0.0) + 3.0))
-                            if ev_start <= r_utc <= ev_end and r.sound_level >= 48.0:
-                                r.classification = "POSSIBLE_CRYING"
-                                r.confidence = ev.confidence or 0.90
-                                is_during_cry = True
-                                break
-                        if not is_during_cry:
-                            if r.sound_level >= settings.SOUND_HIGH_THRESHOLD:
-                                r.classification = "HIGH_SOUND_ACTIVITY"
-                                r.confidence = 0.85
-                            elif r.sound_level >= 45.0:
-                                r.classification = "MODERATE_SOUND"
-                                r.confidence = 0.80
-                            else:
-                                r.classification = "QUIET"
-                                r.confidence = 0.95
+                .all()
+            )
+
+        for r in readings:
+            raw_c = (r.classification or "").upper()
+            if "CRYING" in raw_c:
+                r.classification = "BABY_CRYING_DETECTED"
+            elif "UNCERTAIN" in raw_c:
+                r.classification = "UNCERTAIN"
+            else:
+                # Check if reading falls within an active/recorded crying incident window
+                is_during_cry = False
+                if r.recorded_at and crying_events:
+                    r_utc = to_utc(r.recorded_at)
+                    for ev in crying_events:
+                        ev_start = to_utc(ev.start_time) - timedelta(seconds=3)
+                        ev_end = to_utc(ev.end_time or ev.start_time) + timedelta(seconds=max(3.0, (ev.duration_seconds or 0.0) + 3.0))
+                        if ev_start <= r_utc <= ev_end and (r.sound_level or 0.0) >= 45.0:
+                            r.classification = "BABY_CRYING_DETECTED"
+                            r.confidence = ev.confidence or 0.92
+                            is_during_cry = True
+                            break
+                if not is_during_cry:
+                    r.classification = "NOT_BABY_CRYING"
+                    if not r.confidence:
+                        r.confidence = 0.88
         return readings
 
     @staticmethod

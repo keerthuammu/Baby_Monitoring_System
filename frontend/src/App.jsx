@@ -122,7 +122,17 @@ export default function App() {
   const eventTime = unacknowledgedEvent?.end_time || unacknowledgedEvent?.start_time;
   const isEventRecent = eventTime ? (Date.now() - new Date(eventTime).getTime() < 10000) : false;
 
-  const activeAlert = (isLiveCrying || (unacknowledgedEvent && isEventRecent)) ? unacknowledgedEvent : null;
+  const activeAlert = isLiveCrying
+    ? (unacknowledgedEvent || {
+        id: audioStatus?.event_id || 1,
+        classification: 'BABY_CRYING_DETECTED',
+        confidence: audioStatus?.confidence || 0.92,
+        start_time: audioStatus?.timestamp || new Date().toISOString(),
+        duration_seconds: audioStatus?.seconds_since_update || 2.0,
+        device_id: 'esp32-nursery-01',
+        acknowledged: false
+      })
+    : (unacknowledgedEvent && isEventRecent ? unacknowledgedEvent : null);
 
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col text-slate-100">

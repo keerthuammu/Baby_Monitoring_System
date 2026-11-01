@@ -45,7 +45,6 @@ export default function ReadingsTable({ readings, events, isOnline }) {
               {displayedReadings.map((r) => {
                 const rClass = (r.classification || '').toUpperCase();
                 const explicitCry = rClass.includes('CRYING');
-                const explicitNonCry = rClass.includes('HIGH_SOUND_ACTIVITY') || rClass.includes('NORMAL') || rClass.includes('QUIET');
 
                 // Check if reading falls within an active or recorded crying incident window
                 const rTime = new Date(r.recorded_at).getTime();
@@ -59,7 +58,7 @@ export default function ReadingsTable({ readings, events, isOnline }) {
                   return rTime >= startMs && rTime <= endMs;
                 });
 
-                const isEdgeCry = explicitCry || (!explicitNonCry && isDuringCryEvent && (r.sound_level == null || r.sound_level >= 45.0));
+                const isEdgeCry = explicitCry || (isDuringCryEvent && (r.sound_level == null || r.sound_level >= 45.0));
 
                 // Feature A: Sound Intensity (Decoupled Volume Level)
                 let intensityLabel = "Low Sound";
@@ -72,14 +71,14 @@ export default function ReadingsTable({ readings, events, isOnline }) {
                   intensityStyle = "bg-amber-500/15 text-amber-400 border-amber-500/30";
                 }
 
-                // Feature B: Baby Sound Classification (Trained Model / Verified Event)
-                let babyLabel = "Not Baby Crying";
+                // Feature B: Baby Sound Classification (Authoritative Backend State)
+                let babyLabel = "NOT BABY CRYING";
                 let babyStyle = "bg-emerald-500/15 text-emerald-400 border-emerald-500/30";
                 if (isEdgeCry) {
-                  babyLabel = "🚨 Baby Crying";
+                  babyLabel = "BABY CRYING DETECTED";
                   babyStyle = "bg-rose-500/20 text-rose-400 border-rose-500/40 font-bold animate-pulse";
                 } else if (rClass.includes("UNCERTAIN")) {
-                  babyLabel = "Uncertain";
+                  babyLabel = "UNCERTAIN";
                   babyStyle = "bg-amber-500/15 text-amber-400 border-amber-500/30 font-semibold";
                 }
 

@@ -4,7 +4,7 @@ import { AlertTriangle, CheckCircle2, Volume2, Clock } from 'lucide-react';
 export default function AlertBanner({ activeAlert, onAcknowledge, isAcknowledging }) {
   if (!activeAlert) return null;
 
-  const isCrying = activeAlert.classification === 'POSSIBLE_CRYING';
+  const isCrying = (activeAlert.classification || '').includes('CRYING');
   const bannerBg = isCrying 
     ? 'bg-rose-950/80 border-rose-500/50 shadow-rose-950/50' 
     : 'bg-amber-950/80 border-amber-500/50 shadow-amber-950/50';

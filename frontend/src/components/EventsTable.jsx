@@ -63,7 +63,7 @@ export default function EventsTable({ events, onAcknowledge, isAcknowledging }) 
             </thead>
             <tbody className="divide-y divide-slate-800/60 font-mono">
               {displayedEvents.map((evt) => {
-                const isCrying = evt.classification === 'POSSIBLE_CRYING';
+                const isCrying = (evt.classification || '').includes('CRYING');
                 return (
                   <tr key={evt.id} className="hover:bg-slate-800/30 transition">
                     <td className="py-3 px-3">

@@ -1,5 +1,5 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Query, status, BackgroundTasks
+from fastapi import APIRouter, Depends, Query, Request, status, BackgroundTasks
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import verify_device_api_key
@@ -12,6 +12,7 @@ router = APIRouter(prefix="/api/readings", tags=["Readings"])
 @router.post("", response_model=ReadingResponse, status_code=status.HTTP_201_CREATED)
 def submit_reading(
     reading_in: ReadingCreate,
+    request: Request,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     _authorized: bool = Depends(verify_device_api_key)
@@ -20,16 +21,17 @@ def submit_reading(
     Accepts sound-feature readings from the ESP32 IoT node.
     Supports on-device edge classification (POSSIBLE_CRYING, HIGH_SOUND_ACTIVITY, pitch_hz).
     Requires X-API-Key header.
-    Mirrors reading to Render cloud backend in background.
+    Mirrors reading to Render cloud backend in background when running locally.
     """
     reading = MonitorService.record_reading(
         db,
         reading_in
     )
 
-    # Asynchronously mirror telemetry to Render without blocking ESP32 response
-    payload = reading_in.model_dump(mode="json")
-    background_tasks.add_task(forward_reading_to_cloud, payload)
+    # Prevent loop: only mirror if request did NOT originate from another bridge forwarder
+    if not request.headers.get("X-Forwarded-From-Local"):
+        payload = reading_in.model_dump(mode="json")
+        background_tasks.add_task(forward_reading_to_cloud, payload)
 
     return reading
 

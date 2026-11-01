@@ -285,6 +285,9 @@ void sendTelemetryToBackend(float soundLevel, float rms, int peak, const char* c
   } else if (httpCode == 429) {
     Serial.println("[HTTP ERROR 429] Render/Cloudflare rate limit hit! Backing off for 10s to let rate limiter reset...");
     rateLimitCooldownUntil = millis() + 10000;
+  } else if (httpCode == 502 || httpCode == 503 || httpCode == 504) {
+    Serial.printf("[HTTP %d] Render backend is deploying or waking from cold start. Pausing 6s...\n", httpCode);
+    rateLimitCooldownUntil = millis() + 6000;
   } else if (httpCode > 0) {
     String resp = http.getString();
     Serial.printf("[HTTP ERROR %d] %s\n", httpCode, resp.substring(0, 80).c_str());
@@ -341,6 +344,9 @@ void sendAudioChunkToBackend() {
   } else if (httpCode == 429) {
     Serial.println("[YAMNet AUDIO ERROR 429] Rate limit hit on audio stream. Backing off for 10s...");
     rateLimitCooldownUntil = millis() + 10000;
+  } else if (httpCode == 502 || httpCode == 503 || httpCode == 504) {
+    Serial.printf("[YAMNet AUDIO ERROR %d] Backend deploying/rebooting. Pausing 6s...\n", httpCode);
+    rateLimitCooldownUntil = millis() + 6000;
   } else if (httpCode > 0) {
     Serial.printf("[YAMNet AUDIO ERROR] Server responded with code: %d\n", httpCode);
   }
@@ -501,7 +507,8 @@ void loop() {
   }
 
   // 4. Stream Audio Chunk for YAMNet Neural Inference (only during elevated sound / crying episodes)
-  if (now - lastAudioTransmitTime >= AUDIO_CHUNK_INTERVAL_MS) {
+  // Staggered by at least 1500 ms after telemetry to avoid dual-burst HTTPS rate limits
+  if (now - lastAudioTransmitTime >= AUDIO_CHUNK_INTERVAL_MS && (now - lastTransmitTime >= 1500)) {
     lastAudioTransmitTime = now;
     if (now - lastCryDetectedTime < 8000) {
       sendAudioChunkToBackend();
