@@ -237,15 +237,19 @@ class YamnetClassifier:
             recent_codes = [w["code"] for w in self.window_history[-3:]]
             recent_crying_count = recent_codes.count("BABY_CRYING_DETECTED")
 
-            if recent_crying_count >= attack_req or (raw_code == "BABY_CRYING_DETECTED" and cry_score >= 0.35):
-                # Consistent crying verified across consecutive windows -> trigger alert
+            has_immediate_cry = (raw_code == "BABY_CRYING_DETECTED") and (
+                cry_score >= 0.20 or (has_infant_pitch and cry_score >= 0.10)
+            )
+
+            if recent_crying_count >= attack_req or has_immediate_cry:
+                # Consistent crying verified across consecutive windows or clear strong crying -> immediate alert
                 self.active_crying_incident = True
                 self.consecutive_non_cry_count = 0
                 final_code = "BABY_CRYING_DETECTED"
                 final_label = "BABY CRYING DETECTED"
                 final_confidence = raw_confidence
             elif raw_code == "BABY_CRYING_DETECTED":
-                # Single isolated spike without temporal corroboration -> UNCERTAIN (prevents false alarms)
+                # Single borderline spike without temporal corroboration -> UNCERTAIN (prevents false alarms)
                 final_code = "UNCERTAIN"
                 final_label = "UNCERTAIN"
                 final_confidence = raw_confidence

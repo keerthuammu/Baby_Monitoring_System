@@ -53,11 +53,11 @@ const char* API_KEY            = "baby_monitor_device_secret_key_123";
 // Unique Device Identifier:
 const char* DEVICE_ID          = "esp32-nursery-01";
 
-// Transmission interval in milliseconds (2000 ms recommended):
-const unsigned long TRANSMIT_INTERVAL_MS = 2000;
+// Transmission interval in milliseconds (1000 ms for responsive real-time dashboard):
+const unsigned long TRANSMIT_INTERVAL_MS = 1000;
 
-// Audio classification chunk interval (2500 ms recommended):
-const unsigned long AUDIO_CHUNK_INTERVAL_MS = 2500;
+// Audio classification chunk interval (1200 ms for rapid neural inference):
+const unsigned long AUDIO_CHUNK_INTERVAL_MS = 1200;
 
 // ==========================================
 // 2. I2S MICROPHONE CONFIGURATION

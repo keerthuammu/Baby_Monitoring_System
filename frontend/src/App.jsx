@@ -19,42 +19,61 @@ export default function App() {
   const [isAcknowledging, setIsAcknowledging] = useState(false);
   const [error, setError] = useState(null);
   const [lastSyncTime, setLastSyncTime] = useState(null);
+  const isPollingRef = useRef(false);
+  const tickCountRef = useRef(0);
 
-  // Poll telemetry data
+  // High-performance polling for real-time dashboard responsiveness (1-second tick)
   const loadData = useCallback(async (isManual = false) => {
+    if (isPollingRef.current && !isManual) return;
+    isPollingRef.current = true;
     if (isManual) setIsLoading(true);
+
     try {
-      const [statsData, readingsData, eventsData, devicesData, audioStatusData] = await Promise.all([
-        fetchStats(),
-        fetchReadingsHistory(40),
-        fetchEvents(25),
-        fetchDevices(),
+      tickCountRef.current += 1;
+      const shouldFetchMetadata = isManual || (tickCountRef.current % 5 === 1);
+
+      // Fast critical telemetry (readings, events, live audio status) on every tick
+      const fastPromises = [
+        fetchReadingsHistory(30),
+        fetchEvents(20),
         fetchAudioClassificationStatus().catch(() => null)
+      ];
+
+      // Metadata (devices, global stats) fetched periodically every 5 ticks to reduce network overhead
+      const metaPromises = shouldFetchMetadata
+        ? [fetchStats().catch(() => null), fetchDevices().catch(() => null)]
+        : [Promise.resolve(null), Promise.resolve(null)];
+
+      const [readingsData, eventsData, audioStatusData, statsData, devicesData] = await Promise.all([
+        ...fastPromises,
+        ...metaPromises
       ]);
 
-      setStats(statsData);
-      setReadings(readingsData);
-      setEvents(eventsData);
-      setDevices(devicesData);
-      setAudioStatus(audioStatusData);
+      if (readingsData) setReadings(readingsData);
+      if (eventsData) setEvents(eventsData);
+      if (audioStatusData) setAudioStatus(audioStatusData);
+      if (statsData) setStats(statsData);
+      if (devicesData) setDevices(devicesData);
+
       setLastSyncTime(new Date());
       setError(null);
     } catch (err) {
       console.error('Polling error:', err);
       setError(`Unable to communicate with backend (${API_BASE_URL}). Ensure FastAPI server is running.`);
     } finally {
+      isPollingRef.current = false;
       if (isManual) setIsLoading(false);
     }
   }, []);
 
-  // Polling timer
+  // Polling timer: 1000ms (1.0s) for ultra-responsive live display
   useEffect(() => {
     loadData();
     if (!autoRefresh) return;
 
     const intervalId = setInterval(() => {
       loadData();
-    }, 2500);
+    }, 1000);
 
     return () => clearInterval(intervalId);
   }, [autoRefresh, loadData]);
