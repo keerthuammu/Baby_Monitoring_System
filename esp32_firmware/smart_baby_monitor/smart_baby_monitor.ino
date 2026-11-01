@@ -36,7 +36,7 @@
 // 1. NETWORK & BACKEND CONFIGURATION
 // ==========================================
 // Enter your 2.4 GHz Wi-Fi credentials:
-const char* WIFI_SSID     = "moto g64 5G";
+const char* WIFI_SSID     = "Nothing Phone 3a;
 const char* WIFI_PASSWORD = "abhilashkk";
 
 // Target Ingestion Endpoint (Render Cloud Backend):
@@ -51,11 +51,11 @@ const char* API_KEY            = "baby_monitor_device_secret_key_123";
 // Unique Device Identifier:
 const char* DEVICE_ID          = "esp32-nursery-01";
 
-// Transmission interval in milliseconds (1000 ms for responsive real-time dashboard):
-const unsigned long TRANSMIT_INTERVAL_MS = 1000;
+// Transmission interval in milliseconds (1500 ms gives Render Cloud HTTPS TLS socket room to respond smoothly):
+const unsigned long TRANSMIT_INTERVAL_MS = 1500;
 
-// Audio classification chunk interval (1200 ms for rapid neural inference):
-const unsigned long AUDIO_CHUNK_INTERVAL_MS = 1200;
+// Audio classification chunk interval (2000 ms for stable cloud inference):
+const unsigned long AUDIO_CHUNK_INTERVAL_MS = 2000;
 
 // ==========================================
 // 2. I2S MICROPHONE CONFIGURATION
