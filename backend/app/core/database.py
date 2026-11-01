@@ -1,5 +1,5 @@
 import logging
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from app.core.config import settings
 
@@ -39,4 +39,21 @@ def init_db():
     """Create all database tables on startup if they do not exist."""
     import app.models.models  # Ensure models are registered
     Base.metadata.create_all(bind=engine)
+
+    # Safe auto-migration for newly added columns across PostgreSQL / SQLite
+    try:
+        with engine.begin() as conn:
+            if engine.dialect.name == "postgresql":
+                conn.execute(text("ALTER TABLE sensor_readings ADD COLUMN IF NOT EXISTS classification VARCHAR(50);"))
+                conn.execute(text("ALTER TABLE sensor_readings ADD COLUMN IF NOT EXISTS confidence FLOAT;"))
+            elif engine.dialect.name == "sqlite":
+                res = conn.execute(text("PRAGMA table_info(sensor_readings);")).fetchall()
+                col_names = [r[1] for r in res] if res else []
+                if "classification" not in col_names:
+                    conn.execute(text("ALTER TABLE sensor_readings ADD COLUMN classification VARCHAR(50);"))
+                if "confidence" not in col_names:
+                    conn.execute(text("ALTER TABLE sensor_readings ADD COLUMN confidence FLOAT;"))
+    except Exception as e:
+        logger.warning(f"Database schema auto-sync note: {e}")
+
     logger.info("Database tables initialized successfully.")

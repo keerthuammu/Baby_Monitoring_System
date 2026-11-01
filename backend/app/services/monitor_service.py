@@ -52,17 +52,6 @@ class MonitorService:
         # Ensure device exists and update its heartbeat
         MonitorService.get_or_create_device(db, reading_in.device_id)
 
-        # Create reading
-        reading = SensorReading(
-            device_id=reading_in.device_id,
-            sound_level=reading_in.sound_level,
-            rms_amplitude=reading_in.rms_amplitude,
-            peak_amplitude=reading_in.peak_amplitude,
-            recorded_at=recorded_at,
-            received_at=now
-        )
-        db.add(reading)
-
         # Acoustic Event Handling
         detected_class = (classification or reading_in.classification or "").upper()
         detected_conf = confidence if confidence is not None else reading_in.confidence
@@ -85,16 +74,39 @@ class MonitorService:
         )
         is_high_sound = reading_in.sound_level >= settings.SOUND_HIGH_THRESHOLD
 
-        if is_yamnet_crying or is_edge_crying:
-            # Confirmed crying evidence from authoritative YAMNet inference or verified infant pitch band
+        final_reading_class = None
+        final_reading_conf = detected_conf
+
+        if is_yamnet_crying:
+            final_reading_class = "BABY_CRYING_DETECTED"
+            final_reading_conf = detected_conf if detected_conf is not None else 0.96
             event_class = "POSSIBLE_CRYING"
-            event_conf = detected_conf if detected_conf is not None else 0.90
-            MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, event_conf)
+            MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, final_reading_conf)
+        elif is_edge_crying:
+            final_reading_class = "POSSIBLE_CRYING"
+            final_reading_conf = detected_conf if detected_conf is not None else 0.90
+            event_class = "POSSIBLE_CRYING"
+            MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, final_reading_conf)
         elif is_high_sound:
-            # Elevated acoustic energy that is NOT crying (door slam, clapping, adult speech, domestic noise)
+            final_reading_class = "HIGH_SOUND_ACTIVITY"
+            final_reading_conf = detected_conf if detected_conf is not None else 0.85
             event_class = "HIGH_SOUND_ACTIVITY"
-            event_conf = detected_conf if detected_conf is not None else 0.85
-            MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, event_conf)
+            MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, final_reading_conf)
+        else:
+            final_reading_class = detected_class or "NORMAL"
+
+        # Create reading with persistent classification
+        reading = SensorReading(
+            device_id=reading_in.device_id,
+            sound_level=reading_in.sound_level,
+            rms_amplitude=reading_in.rms_amplitude,
+            peak_amplitude=reading_in.peak_amplitude,
+            classification=final_reading_class,
+            confidence=final_reading_conf,
+            recorded_at=recorded_at,
+            received_at=now
+        )
+        db.add(reading)
 
         db.commit()
         db.refresh(reading)
@@ -171,7 +183,33 @@ class MonitorService:
         query = db.query(SensorReading)
         if device_id:
             query = query.filter(SensorReading.device_id == device_id)
-        return query.order_by(desc(SensorReading.recorded_at)).offset(offset).limit(limit).all()
+        readings = query.order_by(desc(SensorReading.recorded_at)).offset(offset).limit(limit).all()
+
+        # Seamless fallback: backfill unclassified historical packets matching active/recorded crying events
+        has_unclassified = any(r.classification is None for r in readings)
+        if has_unclassified and readings:
+            min_time = min((r.recorded_at for r in readings if r.recorded_at), default=None)
+            max_time = max((r.recorded_at for r in readings if r.recorded_at), default=None)
+            if min_time and max_time:
+                crying_events = (
+                    db.query(CryingEvent)
+                    .filter(
+                        CryingEvent.classification.ilike("%CRYING%"),
+                        CryingEvent.start_time <= max_time + timedelta(seconds=5),
+                    )
+                    .all()
+                )
+                for r in readings:
+                    if r.classification is None and r.recorded_at:
+                        r_utc = to_utc(r.recorded_at)
+                        for ev in crying_events:
+                            ev_start = to_utc(ev.start_time) - timedelta(seconds=3)
+                            ev_end = to_utc(ev.end_time or ev.start_time) + timedelta(seconds=max(3.0, (ev.duration_seconds or 0.0) + 3.0))
+                            if ev_start <= r_utc <= ev_end and r.sound_level >= 45.0:
+                                r.classification = "POSSIBLE_CRYING"
+                                r.confidence = ev.confidence or 0.90
+                                break
+        return readings
 
     @staticmethod
     def get_events(db: Session, device_id: Optional[str] = None, limit: int = 20, offset: int = 0, unack_only: bool = False) -> List[CryingEvent]:

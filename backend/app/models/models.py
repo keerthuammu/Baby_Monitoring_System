@@ -30,6 +30,8 @@ class SensorReading(Base):
     sound_level = Column(Float, nullable=False)          # dB score
     rms_amplitude = Column(Float, nullable=False)        # Root-mean-square amplitude
     peak_amplitude = Column(Integer, nullable=False)      # Peak sample value
+    classification = Column(String(50), nullable=True)    # Edge/YAMNet classification: BABY_CRYING_DETECTED, POSSIBLE_CRYING, etc.
+    confidence = Column(Float, nullable=True)            # Confidence score 0.0 to 1.0
     recorded_at = Column(DateTime(timezone=True), default=utc_now, index=True)
     received_at = Column(DateTime(timezone=True), default=utc_now)
 

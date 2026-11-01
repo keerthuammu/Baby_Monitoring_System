@@ -22,7 +22,6 @@ import wave
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
 import numpy as np
-import scipy.signal
 import onnxruntime as ort
 from app.audio.classifier import AcousticClassifier
 from app.core.config import settings

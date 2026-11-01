@@ -33,6 +33,8 @@ class ReadingResponse(BaseModel):
     sound_level: float
     rms_amplitude: float
     peak_amplitude: int
+    classification: Optional[str] = None
+    confidence: Optional[float] = None
     recorded_at: datetime
     received_at: datetime
 

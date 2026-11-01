@@ -43,7 +43,23 @@ export default function ReadingsTable({ readings, events, isOnline }) {
             </thead>
             <tbody className="divide-y divide-slate-800/60 text-slate-300">
               {displayedReadings.map((r) => {
-                const isEdgeCry = (r.classification || '').toUpperCase().includes('CRYING');
+                const rClass = (r.classification || '').toUpperCase();
+                const explicitCry = rClass.includes('CRYING');
+                const explicitNonCry = rClass.includes('HIGH_SOUND_ACTIVITY') || rClass.includes('NORMAL') || rClass.includes('QUIET');
+
+                // Check if reading falls within an active or recorded crying incident window
+                const rTime = new Date(r.recorded_at).getTime();
+                const isDuringCryEvent = cryingEvents.some(e => {
+                  const startMs = new Date(e.start_time).getTime() - 2500;
+                  const durationMs = ((e.duration_seconds || 0) * 1000) || 5000;
+                  const endMs = Math.max(
+                    new Date(e.end_time || e.start_time).getTime() + 2500,
+                    new Date(e.start_time).getTime() + durationMs + 2500
+                  );
+                  return rTime >= startMs && rTime <= endMs;
+                });
+
+                const isEdgeCry = explicitCry || (!explicitNonCry && isDuringCryEvent && (r.sound_level == null || r.sound_level >= 45.0));
 
                 // Feature A: Sound Intensity (Decoupled Volume Level)
                 let intensityLabel = "Low Sound";
@@ -62,6 +78,9 @@ export default function ReadingsTable({ readings, events, isOnline }) {
                 if (isEdgeCry) {
                   babyLabel = "🚨 Baby Crying";
                   babyStyle = "bg-rose-500/20 text-rose-400 border-rose-500/40 font-bold animate-pulse";
+                } else if (rClass.includes("UNCERTAIN")) {
+                  babyLabel = "Uncertain";
+                  babyStyle = "bg-amber-500/15 text-amber-400 border-amber-500/30 font-semibold";
                 }
 
                 return (
