@@ -169,10 +169,10 @@ class MonitorService:
     def get_devices(db: Session) -> List[Device]:
         now = utc_now()
         devices = db.query(Device).all()
-        # Mark as OFFLINE if no heartbeat in last 15 seconds
+        # Mark as OFFLINE if no heartbeat in last 30 seconds
         for d in devices:
             last_seen = to_utc(d.last_seen_at)
-            if last_seen and (now - last_seen).total_seconds() > 15:
+            if last_seen and (now - last_seen).total_seconds() > 30:
                 if d.connection_status != "OFFLINE":
                     d.connection_status = "OFFLINE"
                     db.commit()
@@ -186,16 +186,25 @@ class MonitorService:
         latest_reading = MonitorService.get_latest_reading(db)
         latest_event = db.query(CryingEvent).order_by(desc(CryingEvent.start_time)).first()
         
+        now = utc_now()
         devices = MonitorService.get_devices(db)
         active_devices = [d for d in devices if d.connection_status == "ONLINE"]
-        status_str = "ONLINE" if active_devices else "OFFLINE"
+
+        # Also check if latest sensor reading arrived within last 30 seconds
+        is_fresh_reading = False
+        if latest_reading:
+            reading_time = to_utc(latest_reading.received_at or latest_reading.recorded_at)
+            if reading_time and (now - reading_time).total_seconds() <= 30:
+                is_fresh_reading = True
+
+        status_str = "ONLINE" if (active_devices or is_fresh_reading) else "OFFLINE"
 
         return {
             "total_readings": total_readings,
             "total_events": total_events,
             "unacknowledged_events": unack_events,
             "latest_reading": latest_reading,
-            "active_device_count": len(active_devices),
+            "active_device_count": len(active_devices) if active_devices else (1 if is_fresh_reading else 0),
             "device_status": status_str,
             "latest_event": latest_event
         }
