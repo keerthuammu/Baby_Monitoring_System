@@ -51,11 +51,11 @@ const char* API_KEY            = "baby_monitor_device_secret_key_123";
 // Unique Device Identifier:
 const char* DEVICE_ID          = "esp32-nursery-01";
 
-// Transmission interval in milliseconds (2500 ms prevents Cloudflare DDoS rate-limit 429):
-const unsigned long TRANSMIT_INTERVAL_MS = 2500;
+// Transmission interval in milliseconds (3000 ms avoids Cloudflare free-tier rate limits):
+const unsigned long TRANSMIT_INTERVAL_MS = 3000;
 
-// Audio classification chunk interval (3000 ms for stable neural audio chunks):
-const unsigned long AUDIO_CHUNK_INTERVAL_MS = 3000;
+// Audio classification chunk interval (6000 ms for neural inference during elevated sound):
+const unsigned long AUDIO_CHUNK_INTERVAL_MS = 6000;
 
 // ==========================================
 // 2. I2S MICROPHONE CONFIGURATION
@@ -77,6 +77,8 @@ const unsigned long AUDIO_CHUNK_INTERVAL_MS = 3000;
 unsigned long lastTransmitTime = 0;
 unsigned long lastAudioTransmitTime = 0;
 unsigned long lastWifiRetryTime = 0;
+unsigned long rateLimitCooldownUntil = 0;
+unsigned long lastCryDetectedTime = 0;  // Infant crying episode hold timer (8 seconds)
 bool wifiConnected = false;
 
 // Audio window accumulation for sound intensity (dB & RMS)
@@ -234,6 +236,13 @@ void sendTelemetryToBackend(float soundLevel, float rms, int peak, const char* c
     return;
   }
 
+  // Active Rate-Limit Cooldown Protection (avoids Cloudflare DDoS trigger)
+  if (millis() < rateLimitCooldownUntil) {
+    unsigned long remainingSec = (rateLimitCooldownUntil - millis()) / 1000 + 1;
+    Serial.printf("[RATE LIMIT 429] In cooldown (%lu s remaining). Telemetry skipped.\n", remainingSec);
+    return;
+  }
+
   HTTPClient http;
   String urlStr = String(BACKEND_URL);
 
@@ -242,17 +251,17 @@ void sendTelemetryToBackend(float soundLevel, float rms, int peak, const char* c
 
   if (urlStr.startsWith("https://")) {
     secureClient.setInsecure(); // Permits SSL handshake with Render cloud
-    secureClient.setTimeout(10000); // 10.0s for mobile hotspot SSL handshake
+    secureClient.setTimeout(8000); // 8.0s for mobile hotspot SSL handshake
     http.begin(secureClient, BACKEND_URL);
   } else {
-    plainClient.setTimeout(4000);
+    plainClient.setTimeout(3000);
     http.begin(plainClient, BACKEND_URL);
   }
-  http.setTimeout(10000); // 10.0 second timeout for cloud HTTPS latency
+  http.setTimeout(8000);
 
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-API-Key", API_KEY);
-  http.addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+  http.addHeader("User-Agent", "ESP32-SmartBabyMonitor/1.1");
 
   // Construct JSON payload with classification & pitch
   char jsonBuffer[384];
@@ -273,9 +282,12 @@ void sendTelemetryToBackend(float soundLevel, float rms, int peak, const char* c
 
   if (httpCode == HTTP_CODE_CREATED || httpCode == HTTP_CODE_OK) {
     Serial.printf("[HTTP 201] Sent -> %.1f dB | %s (%.0f%%) | Pitch: %.0f Hz | RMS: %.1f\n", soundLevel, classification, confidence * 100.0f, pitchHz, rms);
+  } else if (httpCode == 429) {
+    Serial.println("[HTTP ERROR 429] Render/Cloudflare rate limit hit! Backing off for 10s to let rate limiter reset...");
+    rateLimitCooldownUntil = millis() + 10000;
   } else if (httpCode > 0) {
     String resp = http.getString();
-    Serial.printf("[HTTP ERROR %d] %s\n", httpCode, resp.c_str());
+    Serial.printf("[HTTP ERROR %d] %s\n", httpCode, resp.substring(0, 80).c_str());
   } else {
     if (WiFi.status() == WL_CONNECTED) {
       Serial.printf("[HTTP FAILED] Target backend refused or unreachable (%s) at %s\n", http.errorToString(httpCode).c_str(), BACKEND_URL);
@@ -291,6 +303,11 @@ void sendTelemetryToBackend(float soundLevel, float rms, int peak, const char* c
 void sendAudioChunkToBackend() {
   if (WiFi.status() != WL_CONNECTED || audioBufferIdx < 8000) return;
 
+  if (millis() < rateLimitCooldownUntil) {
+    audioBufferIdx = 0; // Drop buffer during cooldown
+    return;
+  }
+
   HTTPClient http;
   String audioUrl = String(AUDIO_CLASSIFY_URL);
 
@@ -305,22 +322,25 @@ void sendAudioChunkToBackend() {
 
   if (audioUrl.startsWith("https://")) {
     secureClient.setInsecure();
-    secureClient.setTimeout(10000);
+    secureClient.setTimeout(8000);
     http.begin(secureClient, audioUrl);
   } else {
-    plainClient.setTimeout(4000);
+    plainClient.setTimeout(3000);
     http.begin(plainClient, audioUrl);
   }
-  http.setTimeout(10000);
+  http.setTimeout(8000);
 
   http.addHeader("Content-Type", "application/octet-stream");
   http.addHeader("X-API-Key", API_KEY);
   http.addHeader("X-Device-Id", DEVICE_ID);
-  http.addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+  http.addHeader("User-Agent", "ESP32-SmartBabyMonitor/1.1");
 
   int httpCode = http.POST((uint8_t*)audioBuffer, audioBufferIdx * sizeof(int16_t));
   if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_CREATED) {
     Serial.printf("[YAMNet AUDIO] Transmitted %d samples (HTTP %d)\n", audioBufferIdx, httpCode);
+  } else if (httpCode == 429) {
+    Serial.println("[YAMNet AUDIO ERROR 429] Rate limit hit on audio stream. Backing off for 10s...");
+    rateLimitCooldownUntil = millis() + 10000;
   } else if (httpCode > 0) {
     Serial.printf("[YAMNet AUDIO ERROR] Server responded with code: %d\n", httpCode);
   }
@@ -436,12 +456,19 @@ void loop() {
 
       bool isCryPitch = (pitch >= 380.0f && pitch <= 680.0f) && (periodicity >= 0.35f);
 
-      if (isCryPitch && soundLevel >= 52.0f) {
-        // Infant crying pitch confirmed in vocal frequency band
+      if (isCryPitch && soundLevel >= 50.0f) {
+        lastCryDetectedTime = now;
+        Serial.printf("[ACOUSTIC PITCH] Infant crying frequency detected: %.1f Hz (periodicity: %.2f)\n", pitch, periodicity);
+      }
+
+      // Infant crying episode latch: Hold crying state for 8 seconds after cry pitch detected,
+      // provided sound remains elevated (handles baby inhale/gasp breath intervals)
+      bool isCryEpisodeActive = (now - lastCryDetectedTime < 8000) && (soundLevel >= 48.0f);
+
+      if (isCryEpisodeActive) {
         babyStatus = "🚨 BABY IS CRYING";
         classification = "POSSIBLE_CRYING";
-        confidence = 0.90f;
-        Serial.printf("[ACOUSTIC PITCH] Infant crying frequency detected: %.1f Hz (periodicity: %.2f)\n", pitch, periodicity);
+        confidence = isCryPitch ? 0.92f : 0.88f;
       } else if (soundLevel >= 65.0f) {
         // High non-crying sound (door slam, loud conversation, clapping, domestic noise)
         classification = "HIGH_SOUND_ACTIVITY";
@@ -473,9 +500,13 @@ void loop() {
     }
   }
 
-  // 4. Periodic Audio Sample Stream for YAMNet Neural Classification (every 2500 ms)
+  // 4. Stream Audio Chunk for YAMNet Neural Inference (only during elevated sound / crying episodes)
   if (now - lastAudioTransmitTime >= AUDIO_CHUNK_INTERVAL_MS) {
     lastAudioTransmitTime = now;
-    sendAudioChunkToBackend();
+    if (now - lastCryDetectedTime < 8000) {
+      sendAudioChunkToBackend();
+    } else {
+      audioBufferIdx = 0; // Clear ambient audio buffer to prevent backlog
+    }
   }
 }
