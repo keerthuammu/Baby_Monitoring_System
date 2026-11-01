@@ -164,15 +164,26 @@ float detectInfantCryPitch(const int16_t* buffer, int len, float sampleRate, flo
   // Full human pitch lag search bounds:
   // 800 Hz -> lag = 20
   // 85 Hz  -> lag = 188
-  int minLag = 20;
-  int maxLag = 188;
-  int testLen = 250; // ~15 ms slice
+  int minLag = 20;   // 800 Hz
+  int maxLag = 188;  // 85 Hz
+  int testLen = 512; // ~32 ms slice for strong fundamental period tracking
 
-  int64_t energy0 = 0;
-  for (int i = 0; i < testLen; i++) {
-    energy0 += (int32_t)buffer[i] * (int32_t)buffer[i];
+  // If buffer has multiple slices, pick slice with highest signal energy
+  int bestOffset = 0;
+  int64_t maxSliceEnergy = 0;
+  for (int offset = 0; offset + testLen + maxLag <= len; offset += 256) {
+    int64_t sliceEnergy = 0;
+    for (int i = 0; i < testLen; i++) {
+      sliceEnergy += (int32_t)buffer[offset + i] * (int32_t)buffer[offset + i];
+    }
+    if (sliceEnergy > maxSliceEnergy) {
+      maxSliceEnergy = sliceEnergy;
+      bestOffset = offset;
+    }
   }
-  if (energy0 < 20000) {
+
+  int64_t energy0 = maxSliceEnergy;
+  if (energy0 < 10000) {
     if (outPeriodicity) *outPeriodicity = 0.0f;
     return 0.0f; // Silence / ambient
   }
@@ -184,7 +195,7 @@ float detectInfantCryPitch(const int16_t* buffer, int len, float sampleRate, flo
   for (int lag = minLag; lag <= maxLag; lag++) {
     int64_t corr = 0;
     for (int i = 0; i < testLen; i++) {
-      corr += (int32_t)buffer[i] * (int32_t)buffer[i + lag];
+      corr += (int32_t)buffer[bestOffset + i] * (int32_t)buffer[bestOffset + i + lag];
     }
     corrValues[lag] = corr;
     if (corr > globalMaxCorr) {
@@ -195,7 +206,7 @@ float detectInfantCryPitch(const int16_t* buffer, int len, float sampleRate, flo
   float periodicity = (float)globalMaxCorr / (float)energy0;
   if (outPeriodicity) *outPeriodicity = periodicity;
 
-  if (periodicity < 0.25f || globalMaxCorr <= 0) {
+  if (periodicity < 0.20f || globalMaxCorr <= 0) {
     return 0.0f;
   }
 
