@@ -170,39 +170,50 @@ class YamnetClassifier:
             {"class_name": self.class_names[idx], "score": round(float(mean_scores[idx]), 3)}
             for idx in top_indices
         ]
+        top_sound_name = top_classes[0]["class_name"] if top_classes else "Unknown"
+        top_sound_score = top_classes[0]["score"] if top_classes else 0.0
+
+        CRY_CLASS_NAMES = {
+            "Baby cry, infant cry",
+            "Crying, sobbing",
+            "Whimper",
+            "Wail, moan"
+        }
+        is_cry_in_top3 = any(c["class_name"] in CRY_CLASS_NAMES for c in top_classes[:3])
+        is_cry_top1 = top_sound_name in CRY_CLASS_NAMES
 
         # 4. Calibrated Multi-Evidence Decision Strategy (Per-Window)
-        high_thresh = getattr(settings, "CRY_SCORE_HIGH_THRESHOLD", 0.18)
-        low_thresh = getattr(settings, "CRY_SCORE_LOW_THRESHOLD", 0.08)
+        high_thresh = getattr(settings, "CRY_SCORE_HIGH_THRESHOLD", 0.20)
+        low_thresh = getattr(settings, "CRY_SCORE_LOW_THRESHOLD", 0.12)
 
-        # Rule A: Strong YAMNet Crying Evidence (dominant over speech)
-        if (cry_score >= high_thresh or cry_energy >= 0.30) and (cry_energy > 0.7 * speech_score):
+        # Rule A: Strong YAMNet Crying Evidence (crying is top-ranked and dominates competing sounds)
+        if (is_cry_top1 and cry_score >= high_thresh) or (is_cry_in_top3 and cry_score >= 0.25 and cry_score >= 0.6 * top_sound_score):
             raw_code = "BABY_CRYING_DETECTED"
-            raw_confidence = float(np.clip(0.70 + 0.30 * max(cry_score, cry_energy * 0.5), 0.75, 0.98))
-        # Rule B: Moderate YAMNet Crying with Supporting Infant Pitch Evidence
-        elif (cry_score >= low_thresh or cry_energy >= 0.14) and has_infant_pitch and (cry_energy > 0.5 * speech_score):
+            raw_confidence = float(np.clip(0.72 + 0.28 * max(cry_score, cry_energy * 0.5), 0.75, 0.98))
+        # Rule B: Moderate YAMNet Crying in Top 3 with Supporting Infant Vocal Pitch (380 - 680 Hz)
+        elif is_cry_in_top3 and (cry_score >= low_thresh) and has_infant_pitch and (cry_score >= 0.45 * top_sound_score):
             raw_code = "BABY_CRYING_DETECTED"
-            raw_confidence = float(np.clip(0.65 + 0.25 * cry_energy + 0.10 * periodicity, 0.72, 0.92))
-        # Rule C: Ambiguous / Borderline Evidence (insufficient for alert, but not clear non-cry)
-        elif (cry_score >= 0.06 or cry_energy >= 0.12) and dominant_negative < 0.35:
+            raw_confidence = float(np.clip(0.68 + 0.22 * cry_score + 0.10 * periodicity, 0.72, 0.92))
+        # Rule C: Ambiguous / Borderline Evidence (crying present but weak or conflicting)
+        elif is_cry_in_top3 and cry_score >= 0.08:
             raw_code = "UNCERTAIN"
             raw_confidence = round(cry_score, 2)
-        # Rule D: Definite Non-Crying Sound (Adult speech, conversation, music, clapping, doors, ambient)
+        # Rule D: Definite Non-Crying Sound (Adult speech, conversation, music, clapping, doors, alarms, ambient)
         else:
             raw_code = "NOT_BABY_CRYING"
-            raw_confidence = round(max(dominant_negative, silence_score, 0.80), 2)
+            raw_confidence = round(max(top_sound_score, silence_score, 0.85), 2)
 
         # 5. Temporal Accumulation & Hysteresis Decision Mechanism
-        # Reset history if stream had a significant interruption (> 8.0s)
+        # Reset history if stream had a significant interruption (> 6.0s)
         if self.last_update_time is not None:
-            if (now - self.last_update_time).total_seconds() > 8.0:
+            if (now - self.last_update_time).total_seconds() > 6.0:
                 self.window_history.clear()
                 self.active_crying_incident = False
                 self.consecutive_non_cry_count = 0
 
         max_history = getattr(settings, "CRY_HISTORY_WINDOW_SIZE", 5)
         attack_req = getattr(settings, "CRY_ATTACK_WINDOWS", 2)
-        release_req = getattr(settings, "CRY_RELEASE_WINDOWS", 3)
+        release_req = getattr(settings, "CRY_RELEASE_WINDOWS", 2)
 
         self.window_history.append({
             "code": raw_code,
@@ -222,13 +233,13 @@ class YamnetClassifier:
                 final_confidence = raw_confidence
             else:
                 self.consecutive_non_cry_count += 1
-                if self.consecutive_non_cry_count < release_req:
-                    # Breathing pause resilience: hold incident active through short wail pauses
+                if self.consecutive_non_cry_count < release_req and dominant_negative < 0.40:
+                    # Short breathing pause resilience: hold active only if loud competing negative hasn't taken over
                     final_code = "BABY_CRYING_DETECTED"
                     final_label = "BABY CRYING DETECTED"
-                    final_confidence = round(max(0.70, (self.last_confidence or 0.85) * 0.95), 2)
+                    final_confidence = round(max(0.70, (self.last_confidence or 0.85) * 0.90), 2)
                 else:
-                    # 3 consecutive non-crying windows: incident concluded
+                    # Non-crying verified: incident concluded
                     self.active_crying_incident = False
                     final_code = raw_code
                     final_label = "NOT BABY CRYING" if raw_code == "NOT_BABY_CRYING" else "UNCERTAIN"
@@ -238,7 +249,7 @@ class YamnetClassifier:
             recent_crying_count = recent_codes.count("BABY_CRYING_DETECTED")
 
             has_immediate_cry = (raw_code == "BABY_CRYING_DETECTED") and (
-                cry_score >= 0.20 or (has_infant_pitch and cry_score >= 0.10)
+                (is_cry_top1 and cry_score >= 0.25) or (has_infant_pitch and cry_score >= 0.16)
             )
 
             if recent_crying_count >= attack_req or has_immediate_cry:
