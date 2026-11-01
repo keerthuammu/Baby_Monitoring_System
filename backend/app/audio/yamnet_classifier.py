@@ -25,6 +25,7 @@ import numpy as np
 import scipy.signal
 import onnxruntime as ort
 from app.audio.classifier import AcousticClassifier
+from app.core.config import settings
 
 logger = logging.getLogger("yamnet_classifier")
 
@@ -57,13 +58,23 @@ class YamnetClassifier:
                 self.class_names.append(row[2])
         logger.info(f"Loaded {len(self.class_names)} AudioSet class definitions.")
 
-        # State tracking for staleness and consecutive detections
+        # State tracking for staleness and temporal accumulation
+        self.window_history: List[Dict[str, Any]] = []
+        self.active_crying_incident: bool = False
+        self.consecutive_non_cry_count: int = 0
         self.recent_cry_scores: List[float] = []
         self.last_update_time: Optional[datetime] = None
         self.last_classification: str = "AUDIO UNAVAILABLE"
         self.last_code: str = "AUDIO_UNAVAILABLE"
         self.last_confidence: float = 0.0
         self.last_top_classes: List[Dict[str, Any]] = []
+
+    def reset_temporal_state(self):
+        """Resets window accumulation and hysteresis incident trackers."""
+        self.window_history.clear()
+        self.active_crying_incident = False
+        self.consecutive_non_cry_count = 0
+        self.recent_cry_scores.clear()
 
     @classmethod
     def get_instance(cls) -> "YamnetClassifier":
@@ -118,101 +129,156 @@ class YamnetClassifier:
         # Average prediction scores across frames
         mean_scores = np.mean(scores, axis=0)
 
-        # YAMNet AudioSet indices for infant crying and vocal distress:
-        # Index 20: "Baby cry, infant cry"
-        # Index 19: "Crying, sobbing"
-        # Index 21: "Whimper"
-        # Index 22: "Wail, moan"
-        # Index 11: "Screaming"
-        cry_score = float(max(
-            mean_scores[20],
-            mean_scores[19],
-            mean_scores[21],
-            mean_scores[22],
-            mean_scores[11]
-        ))
+        # AudioSet Class Indices for Baby Crying and Competing Sound Classes
+        # Crying classes
+        cry_indices = [20, 19, 21, 22]  # Baby cry, Crying/sobbing, Whimper, Wail/moan
+        # Competing non-crying classes
+        speech_indices = [0, 1, 2, 4, 5, 6, 7]  # Speech, Child speech, Conversation, Male, Female, Shout, Yell
+        laughter_indices = [13, 14, 15]  # Laughter, Baby laughter/giggle, Snicker
+        clap_indices = [58, 62]  # Clapping, Applause
+        music_index = 132
+        silence_index = 494
+        door_indices = [348, 349, 351]
 
-        # Also evaluate physical acoustic profile (F0 pitch & cry band energy)
-        # Scale to 16-bit amplitude range for standard dB SPL calculations
+        # 1. Primary YAMNet Crying Evidence
+        cry_score = float(max(mean_scores[idx] for idx in cry_indices))
+        cry_energy = float(sum(mean_scores[idx] for idx in cry_indices))
+
+        # 2. Competing Negative Evidence (Inhibition)
+        speech_score = float(max(mean_scores[idx] for idx in speech_indices))
+        laughter_score = float(max(mean_scores[idx] for idx in laughter_indices))
+        clap_score = float(max(mean_scores[idx] for idx in clap_indices))
+        music_score = float(mean_scores[music_index])
+        silence_score = float(mean_scores[silence_index])
+        door_score = float(max(mean_scores[idx] for idx in door_indices))
+        dominant_negative = max(speech_score, laughter_score, clap_score, music_score, door_score)
+
+        # 3. Acoustic Pitch & Spectral Supporting Evidence
         int_signal = (signal * 32767.0).astype(np.float64)
         acoustic_res = AcousticClassifier.classify_waveform(int_signal, sample_rate)
-        acoustic_class = acoustic_res.get("classification")
-        acoustic_conf = acoustic_res.get("confidence", 0.5)
+        features = acoustic_res.get("features", {})
+        pitch = features.get("pitch_hz", 0.0)
+        periodicity = features.get("periodicity", 0.0)
+        cry_band_ratio = features.get("cry_band_ratio", 0.0)
 
-        # Reset smoothing buffer if more than 4.0 seconds elapsed since previous audio chunk
-        if self.last_update_time is not None:
-            if (now - self.last_update_time).total_seconds() > 4.0:
-                self.recent_cry_scores.clear()
+        # Infant vocal fundamental pitch is between 300 - 720 Hz with distinct harmonic periodicity
+        has_infant_pitch = (300.0 <= pitch <= 720.0) and (periodicity >= 0.28) and (cry_band_ratio >= 0.28)
 
-        # If current frame is clearly non-crying (cry_score < 0.05), clear old crying history
-        if cry_score < 0.05:
-            self.recent_cry_scores.clear()
-
-        # Smooth across last 3 inferences (rolling window) to prevent isolated spikes
-        self.recent_cry_scores.append(cry_score)
-        if len(self.recent_cry_scores) > 3:
-            self.recent_cry_scores.pop(0)
-        smoothed_cry_score = float(np.mean(self.recent_cry_scores))
-
-        # Top 5 detected sound events from YAMNet
+        # Top 5 detected sound events from YAMNet for explainability
         top_indices = np.argsort(mean_scores)[::-1][:5]
         top_classes = [
             {"class_name": self.class_names[idx], "score": round(float(mean_scores[idx]), 3)}
             for idx in top_indices
         ]
 
-        # Classification decision boundaries:
-        CRY_CLASS_NAMES = {
-            "Baby cry, infant cry",
-            "Crying, sobbing",
-            "Whimper",
-            "Wail, moan",
-            "Screaming",
-            "Child speech, kid speaking"
-        }
-        any_top_cry = any(c["class_name"] in CRY_CLASS_NAMES and c["score"] >= 0.05 for c in top_classes[:5])
+        # 4. Calibrated Multi-Evidence Decision Strategy (Per-Window)
+        high_thresh = getattr(settings, "CRY_SCORE_HIGH_THRESHOLD", 0.18)
+        low_thresh = getattr(settings, "CRY_SCORE_LOW_THRESHOLD", 0.08)
 
-        # 1. BABY CRYING DETECTED: YAMNet cry score >= 0.08 OR top 5 cry class match OR acoustic harmonic match
-        if (smoothed_cry_score >= 0.08 and sound_level_db >= 38.0) or any_top_cry or (acoustic_class == "POSSIBLE_CRYING"):
-            code = "BABY_CRYING_DETECTED"
-            display_label = "BABY CRYING DETECTED"
-            confidence = max(round(smoothed_cry_score, 2), round(acoustic_conf, 2), 0.88)
-        elif smoothed_cry_score >= 0.04:
-            # Borderline / ambiguous crying signal
-            code = "UNCERTAIN"
-            display_label = "UNCERTAIN"
-            confidence = round(smoothed_cry_score, 2)
+        # Rule A: Strong YAMNet Crying Evidence (dominant over speech)
+        if (cry_score >= high_thresh or cry_energy >= 0.30) and (cry_energy > 0.7 * speech_score):
+            raw_code = "BABY_CRYING_DETECTED"
+            raw_confidence = float(np.clip(0.70 + 0.30 * max(cry_score, cry_energy * 0.5), 0.75, 0.98))
+        # Rule B: Moderate YAMNet Crying with Supporting Infant Pitch Evidence
+        elif (cry_score >= low_thresh or cry_energy >= 0.14) and has_infant_pitch and (cry_energy > 0.5 * speech_score):
+            raw_code = "BABY_CRYING_DETECTED"
+            raw_confidence = float(np.clip(0.65 + 0.25 * cry_energy + 0.10 * periodicity, 0.72, 0.92))
+        # Rule C: Ambiguous / Borderline Evidence (insufficient for alert, but not clear non-cry)
+        elif (cry_score >= 0.06 or cry_energy >= 0.12) and dominant_negative < 0.35:
+            raw_code = "UNCERTAIN"
+            raw_confidence = round(cry_score, 2)
+        # Rule D: Definite Non-Crying Sound (Adult speech, conversation, music, clapping, doors, ambient)
         else:
-            # Definite non-crying sound (speech, music, door slam, claps, ambient)
-            code = "NOT_BABY_CRYING"
-            display_label = "NOT BABY CRYING"
-            primary_other = top_classes[0]["score"] if top_classes else 0.80
-            confidence = round(primary_other, 2)
+            raw_code = "NOT_BABY_CRYING"
+            raw_confidence = round(max(dominant_negative, silence_score, 0.80), 2)
+
+        # 5. Temporal Accumulation & Hysteresis Decision Mechanism
+        # Reset history if stream had a significant interruption (> 8.0s)
+        if self.last_update_time is not None:
+            if (now - self.last_update_time).total_seconds() > 8.0:
+                self.window_history.clear()
+                self.active_crying_incident = False
+                self.consecutive_non_cry_count = 0
+
+        max_history = getattr(settings, "CRY_HISTORY_WINDOW_SIZE", 5)
+        attack_req = getattr(settings, "CRY_ATTACK_WINDOWS", 2)
+        release_req = getattr(settings, "CRY_RELEASE_WINDOWS", 3)
+
+        self.window_history.append({
+            "code": raw_code,
+            "cry_score": cry_score,
+            "confidence": raw_confidence,
+            "time": now
+        })
+        if len(self.window_history) > max_history:
+            self.window_history.pop(0)
+
+        # Apply State Transition with Hysteresis
+        if self.active_crying_incident:
+            if raw_code == "BABY_CRYING_DETECTED":
+                self.consecutive_non_cry_count = 0
+                final_code = "BABY_CRYING_DETECTED"
+                final_label = "BABY CRYING DETECTED"
+                final_confidence = raw_confidence
+            else:
+                self.consecutive_non_cry_count += 1
+                if self.consecutive_non_cry_count < release_req:
+                    # Breathing pause resilience: hold incident active through short wail pauses
+                    final_code = "BABY_CRYING_DETECTED"
+                    final_label = "BABY CRYING DETECTED"
+                    final_confidence = round(max(0.70, (self.last_confidence or 0.85) * 0.95), 2)
+                else:
+                    # 3 consecutive non-crying windows: incident concluded
+                    self.active_crying_incident = False
+                    final_code = raw_code
+                    final_label = "NOT BABY CRYING" if raw_code == "NOT_BABY_CRYING" else "UNCERTAIN"
+                    final_confidence = raw_confidence
+        else:
+            recent_codes = [w["code"] for w in self.window_history[-3:]]
+            recent_crying_count = recent_codes.count("BABY_CRYING_DETECTED")
+
+            if recent_crying_count >= attack_req or (raw_code == "BABY_CRYING_DETECTED" and cry_score >= 0.35):
+                # Consistent crying verified across consecutive windows -> trigger alert
+                self.active_crying_incident = True
+                self.consecutive_non_cry_count = 0
+                final_code = "BABY_CRYING_DETECTED"
+                final_label = "BABY CRYING DETECTED"
+                final_confidence = raw_confidence
+            elif raw_code == "BABY_CRYING_DETECTED":
+                # Single isolated spike without temporal corroboration -> UNCERTAIN (prevents false alarms)
+                final_code = "UNCERTAIN"
+                final_label = "UNCERTAIN"
+                final_confidence = raw_confidence
+            else:
+                final_code = raw_code
+                final_label = "NOT BABY CRYING" if raw_code == "NOT_BABY_CRYING" else "UNCERTAIN"
+                final_confidence = raw_confidence
 
         # Update service cache with inference completion timestamp
         completion_time = datetime.now(timezone.utc)
         self.last_update_time = completion_time
-        self.last_classification = display_label
-        self.last_code = code
-        self.last_confidence = confidence
+        self.last_classification = final_label
+        self.last_code = final_code
+        self.last_confidence = final_confidence
         self.last_top_classes = top_classes
 
         logger.info(
             f"[INFERENCE] Completed in {len(signal)/sample_rate:.2f}s audio | "
-            f"Result: {display_label} ({confidence*100:.0f}%) | "
-            f"dB: {sound_level_db} | Top: {top_classes[0]['class_name'] if top_classes else 'N/A'}"
+            f"Result: {final_label} ({final_confidence*100:.0f}%) | "
+            f"dB: {sound_level_db} | Top: {top_classes[0]['class_name'] if top_classes else 'N/A'} | "
+            f"Active Incident: {self.active_crying_incident}"
         )
 
         return {
-            "classification": code,
-            "display_label": display_label,
-            "confidence": confidence,
+            "classification": final_code,
+            "display_label": final_label,
+            "confidence": final_confidence,
             "sound_level_db": sound_level_db,
             "rms_amplitude": round(rms * 32768.0, 1),
             "peak_amplitude": peak_amp,
             "top_classes": top_classes,
             "crying_score_raw": round(cry_score, 3),
-            "is_baby_crying": (code == "BABY_CRYING_DETECTED"),
+            "is_baby_crying": (final_code == "BABY_CRYING_DETECTED"),
             "timestamp": completion_time.isoformat(),
             "status": "ACTIVE"
         }

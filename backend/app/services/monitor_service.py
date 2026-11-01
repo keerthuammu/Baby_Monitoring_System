@@ -67,18 +67,17 @@ class MonitorService:
         detected_class = classification or reading_in.classification
         detected_conf = confidence if confidence is not None else reading_in.confidence
 
-        # Infant cry detection strictly requires infant vocal fundamental pitch (300 - 680 Hz)
-        # or neural YAMNet baby cry classification.
-        if reading_in.pitch_hz and 300.0 <= reading_in.pitch_hz <= 680.0:
-            detected_class = "POSSIBLE_CRYING"
-            detected_conf = max(detected_conf or 0.0, 0.88)
-
         is_high_sound = reading_in.sound_level >= settings.SOUND_HIGH_THRESHOLD
-        is_alert_class = detected_class in ["POSSIBLE_CRYING", "HIGH_SOUND_ACTIVITY"]
-        
-        if is_high_sound or is_alert_class:
-            # All other loud sounds (adult voice, TV, claps, doors, general noise) are strictly HIGH_SOUND_ACTIVITY
-            event_class = detected_class or "HIGH_SOUND_ACTIVITY"
+        is_crying_detected = detected_class in ["POSSIBLE_CRYING", "BABY_CRYING_DETECTED"]
+
+        if is_crying_detected:
+            # Confirmed crying evidence from authoritative YAMNet inference
+            event_class = "POSSIBLE_CRYING"
+            event_conf = detected_conf if detected_conf is not None else 0.88
+            MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, event_conf)
+        elif is_high_sound:
+            # Elevated acoustic energy that is NOT crying (door slam, clapping, adult speech, domestic noise)
+            event_class = "HIGH_SOUND_ACTIVITY"
             event_conf = detected_conf if detected_conf is not None else 0.85
             MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, event_conf)
 

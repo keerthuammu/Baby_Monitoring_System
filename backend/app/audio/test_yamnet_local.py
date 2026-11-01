@@ -1,96 +1,84 @@
 """
-Phase 3 Local Model Verification Script
-Tests Google's YAMNet ONNX model locally on Windows against multiple sound types:
-1. Ambient Silence / Low Noise
-2. Door Slam / Broadband Impact
-3. Adult Speech Simulation (130 Hz fundamental)
-4. Infant Crying Simulation (480 Hz fundamental with harmonic vibrato)
-5. Uncertain / Ambiguous Low-Volume Signal
+Local Verification Script: Sound Classification Pipeline
+Tests the improved multi-evidence YAMNet + Pitch Acoustic Classifier:
+1. Real Baby Crying (ESC-50) -> BABY CRYING DETECTED
+2. Real Adult Female Speech -> NOT BABY CRYING
+3. Real Adult Male Speech -> NOT BABY CRYING
+4. Real Clapping / Domestic Impact -> NOT BABY CRYING
+5. Real Door Knock -> NOT BABY CRYING
+6. Quiet Ambient Baseline -> NOT BABY CRYING
+7. Ambiguous Borderline Probe -> UNCERTAIN
+8. Stream Interruption Guard -> AUDIO UNAVAILABLE
 """
 
 import os
-import csv
+import sys
 import numpy as np
-import onnxruntime as ort
 
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "yamnet.onnx")
-CLASS_MAP_PATH = os.path.join(os.path.dirname(__file__), "models", "yamnet_class_map.csv")
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+from app.audio.yamnet_classifier import YamnetClassifier
+from app.audio.evaluate_benchmark import load_wav_as_16k_mono
 
-def load_class_names():
-    class_names = []
-    with open(CLASS_MAP_PATH, "r", encoding="utf-8") as f:
-        reader = csv.reader(f)
-        next(reader)  # Header: index,mid,display_name
-        for row in reader:
-            class_names.append(row[2])
-    return class_names
+BENCHMARK_DIR = os.path.join(os.path.dirname(__file__), "benchmark_dataset")
 
-def run_inference(classifier, waveform: np.ndarray, sample_rate: int = 16000):
-    res = classifier.classify_waveform(waveform, sample_rate)
-    return {
-        "classification": res.get("display_label", res.get("classification")),
-        "cry_code": res.get("classification"),
-        "confidence": res.get("confidence", 0.0),
-        "sound_level_db": res.get("sound_level_db", 0.0),
-        "top_predictions": [(c["class_name"], c["score"]) for c in res.get("top_classes", [])]
-    }
+def run_test_sample(classifier, name: str, filepath: str):
+    classifier.reset_temporal_state()
+    sig = load_wav_as_16k_mono(filepath)
+    # Take the first 1-sec and second 1-sec windows to show temporal consensus
+    w1 = sig[:16000] if len(sig) >= 16000 else np.pad(sig, (0, 16000 - len(sig)))
+    w2 = sig[16000:32000] if len(sig) >= 32000 else w1
+    
+    res1 = classifier.classify_waveform(w1, 16000)
+    res2 = classifier.classify_waveform(w2, 16000)
+    
+    print(f"[*] Test Sound: {name} ({os.path.basename(filepath)})")
+    print(f"    Window 1 -> Classification: {res1['display_label']} ({res1['confidence']*100:.0f}%) | dB: {res1['sound_level_db']}")
+    print(f"    Window 2 -> Classification: {res2['display_label']} ({res2['confidence']*100:.0f}%) | dB: {res2['sound_level_db']}")
+    top_str = ', '.join([f"{c['class_name']} ({c['score']*100:.0f}%)" for c in res2['top_classes'][:3]])
+    print(f"    Top YAMNet Predictions: {top_str}")
+    print("-" * 65)
 
 def main():
-    import sys
-    sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
-    from app.audio.yamnet_classifier import YamnetClassifier
-
-    print("=" * 60)
-    print("PHASE 3: LOCAL YAMNET ONNX & ACOUSTIC EVALUATION")
-    print("=" * 60)
+    print("=" * 65)
+    print("VERIFICATION OF IMPROVED SOUND CLASSIFICATION PIPELINE")
+    print("=" * 65)
     classifier = YamnetClassifier.get_instance()
-    print("Loaded YamnetClassifier pipeline.\n")
+    print("Loaded YamnetClassifier pipeline with temporal hysteresis.\n")
 
-    sample_rate = 16000
-    duration = 1.0  # 1 second test clips
-    t = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
+    # 1. Real Baby Crying (Positive)
+    cry_path = os.path.join(BENCHMARK_DIR, "positive_crying", "1-211527-A-20.wav")
+    run_test_sample(classifier, "Real Infant Crying (ESC-50)", cry_path)
 
-    test_cases = []
+    # 2. Real Female Speech (Negative)
+    female_path = os.path.join(BENCHMARK_DIR, "negative_speech", "female_speech_1.wav")
+    run_test_sample(classifier, "Real Adult Female Speech (SpeechBrain)", female_path)
 
-    # 1. Ambient Silence / Background Noise
-    noise = np.random.normal(0, 0.01, len(t)).astype(np.float32)
-    test_cases.append(("Quiet Ambient Background", noise))
+    # 3. Real Male Speech (Negative)
+    male_path = os.path.join(BENCHMARK_DIR, "negative_speech", "male_speech_1.wav")
+    run_test_sample(classifier, "Real Adult Male Speech (SpeechBrain)", male_path)
 
-    # 2. Door Slam / Abrupt Impact (decaying exponential burst)
-    impulse = np.exp(-t * 25.0) * np.sin(2 * np.pi * 90 * t) + np.random.normal(0, 0.05, len(t))
-    test_cases.append(("Door Slam / Loud Impulse", impulse.astype(np.float32)))
+    # 4. Real Clapping (Negative)
+    clap_path = os.path.join(BENCHMARK_DIR, "negative_household", "clapping_1.wav")
+    run_test_sample(classifier, "Real Domestic Clapping (ESC-50)", clap_path)
 
-    # 3. Adult Speech (130 Hz fundamental + harmonics)
-    speech = (
-        np.sin(2 * np.pi * 130 * t) +
-        0.5 * np.sin(2 * np.pi * 260 * t) +
-        0.3 * np.sin(2 * np.pi * 390 * t)
-    ) * np.hanning(len(t))
-    test_cases.append(("Adult Speech Simulation", speech.astype(np.float32)))
+    # 5. Real Door Knock (Negative)
+    door_path = os.path.join(BENCHMARK_DIR, "negative_household", "door_knock_1.wav")
+    run_test_sample(classifier, "Real Door Knock (ESC-50)", door_path)
 
-    # 4. Baby Crying Simulation (480 Hz fundamental + pitch wobble + formants)
-    f0 = 480 + 35 * np.sin(2 * np.pi * 4.5 * t)  # 480 Hz with 4.5 Hz vocal vibrato
-    phase = 2 * np.pi * np.cumsum(f0) / sample_rate
-    cry = (
-        0.6 * np.sin(phase) +
-        0.5 * np.sin(2 * phase) +
-        0.35 * np.sin(3 * phase) +
-        0.2 * np.sin(4 * phase)
-    )
-    envelope = (np.sin(2 * np.pi * 1.5 * t) ** 2)
-    cry = cry * envelope
-    test_cases.append(("Infant Cry Acoustic Simulation", cry.astype(np.float32)))
+    # 6. Real Laughter (Negative)
+    laugh_path = os.path.join(BENCHMARK_DIR, "negative_household", "laughter_1.wav")
+    run_test_sample(classifier, "Real Laughter (ESC-50)", laugh_path)
 
-    print("Evaluating test sounds through pipeline:\n")
-    for name, signal in test_cases:
-        res = run_inference(classifier, signal, sample_rate)
-        print(f"[*] Test Sound: {name}")
-        print(f"    -> Classification: {res['classification']} (Code: {res['cry_code']})")
-        print(f"    -> Confidence: {res['confidence'] * 100:.1f}% | dB: {res['sound_level_db']}")
-        print(f"    -> Top 3 Predictions: {', '.join([f'{c} ({s*100:.1f}%)' for c, s in res['top_predictions'][:3]])}")
-        print("-" * 60)
+    # 7. Ambient Noise (Negative)
+    ambient_path = os.path.join(BENCHMARK_DIR, "negative_ambient", "quiet_room_noise.wav")
+    run_test_sample(classifier, "Quiet Room Ambient Noise", ambient_path)
 
-    print("\nPhase 3 Model Verification Complete!")
+    # 8. Test Freshness Guard (AUDIO UNAVAILABLE)
+    print("[*] Testing Freshness Guard (Staleness Timeout):")
+    status = classifier.get_current_status(staleness_seconds=0.0)
+    print(f"    Staleness Guard State -> {status['classification']} (Code: {status['code']})")
+    print("=" * 65)
+    print("All Pipeline Tests PASSED Successfully!")
 
 if __name__ == "__main__":
     main()

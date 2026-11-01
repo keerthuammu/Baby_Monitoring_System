@@ -415,33 +415,33 @@ void loop() {
         intensity = "MODERATE SOUND";
       }
 
-      // Feature B: Baby Sound Status (Acoustic Pitch & Model Verification)
+      // Feature B: Sound Classification & Edge Acoustic Analysis
+      // YAMNet neural inference via /api/audio/classify is the primary evidence.
+      // Pitch autocorrelation is supporting acoustic telemetry only.
       const char* babyStatus = "NOT BABY CRYING";
-      const char* classification = "HIGH_SOUND_ACTIVITY";
+      const char* classification = "QUIET";
       float confidence = 0.85f;
 
-      // Infant cry detection: matches 240 Hz - 720 Hz vocal range (including phone speaker harmonics at ~270 Hz)
-      bool isCryPitch = (pitch >= 240.0f && pitch <= 720.0f) || ((pitch * 2.0f) >= 480.0f && (pitch * 2.0f) <= 720.0f);
+      bool isCryPitch = (pitch >= 300.0f && pitch <= 720.0f) && (periodicity >= 0.30f);
 
-      if (isCryPitch && periodicity >= 0.25f && soundLevel >= 48.0f) {
-        babyStatus = "🚨 BABY CRYING DETECTED";
-        classification = "POSSIBLE_CRYING";
-        confidence = 0.92f;
-        Serial.printf("\n[ACOUSTIC ALERT] 🚨 INFANT CRY FREQUENCY DETECTED! Pitch: %.1f Hz | Periodicity: %.2f\n", pitch, periodicity);
-      } else if (soundLevel < 45.0f) {
-        classification = "QUIET";
-        babyStatus = "NOT BABY CRYING";
-        confidence = 0.95f;
-      } else {
-        // High or Moderate non-crying sound (adult speech, clapping, doors, TV)
-        classification = (soundLevel >= 65.0f) ? "HIGH_SOUND_ACTIVITY" : "MODERATE_SOUND";
-        babyStatus = "NOT BABY CRYING";
+      if (soundLevel >= 65.0f) {
+        classification = "HIGH_SOUND_ACTIVITY";
+        confidence = 0.88f;
+      } else if (soundLevel >= 45.0f) {
+        classification = "MODERATE_SOUND";
         confidence = 0.85f;
+      } else {
+        classification = "QUIET";
+        confidence = 0.95f;
+      }
+
+      if (isCryPitch && soundLevel >= 48.0f) {
+        Serial.printf("[ACOUSTIC PITCH] Supporting infant vocal pitch detected: %.1f Hz (periodicity: %.2f)\n", pitch, periodicity);
       }
 
       // Explicit Serial Monitor output: Clearly separates Volume from Baby Status
-      Serial.printf("[SOUND] Level: %5.1f dB | Intensity: [%s] | Baby Classification: [%s] | Pitch: %.0f Hz\n",
-                    soundLevel, intensity, babyStatus, pitch);
+      Serial.printf("[SOUND] Level: %5.1f dB | Intensity: [%s] | Pitch: %.0f Hz\n",
+                    soundLevel, intensity, pitch);
 
       // Transmit telemetry to FastAPI backend
       sendTelemetryToBackend(soundLevel, rms, windowPeak, classification, pitch, confidence);

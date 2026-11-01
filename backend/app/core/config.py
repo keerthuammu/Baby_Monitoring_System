@@ -21,6 +21,15 @@ class Settings(BaseSettings):
     CRYING_CONFIDENCE_THRESHOLD: float = 0.70
     AUDIO_RETENTION_DAYS: int = 7
     
+    # Acoustic & Temporal Decision Thresholds (Tuned via Benchmark Dataset)
+    CRY_SCORE_HIGH_THRESHOLD: float = 0.18
+    CRY_SCORE_LOW_THRESHOLD: float = 0.08
+    CRY_ATTACK_WINDOWS: int = 2
+    CRY_RELEASE_WINDOWS: int = 3
+    CRY_HISTORY_WINDOW_SIZE: int = 5
+    ENABLE_PITCH_SUPPORT: bool = True
+    AUDIO_STALENESS_SECONDS: float = 6.0
+    
     # Cloud Synchronization
     ENABLE_CLOUD_FORWARDING: bool = True
     CLOUD_BACKEND_URL: str = "https://baby-monitor-backend-8m8o.onrender.com"

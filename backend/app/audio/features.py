@@ -48,9 +48,10 @@ def estimate_pitch_autocorr(signal: np.ndarray, sample_rate: int = 16000) -> Tup
     if max_lag >= len(sig):
         max_lag = len(sig) - 1
 
-    # Autocorrelation
-    corr = np.correlate(sig, sig, mode='full')
-    corr = corr[len(sig)-1:]
+    # Fast O(N log N) Autocorrelation via FFT
+    n = len(sig)
+    f = np.fft.rfft(sig, n=2 * n)
+    corr = np.fft.irfft(f * np.conj(f))[:n]
     
     if corr[0] <= 0:
         return 0.0, 0.0
