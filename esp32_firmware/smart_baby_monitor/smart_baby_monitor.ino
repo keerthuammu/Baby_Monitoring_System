@@ -85,6 +85,7 @@ bool wifiConnected = false;
 double windowSumSquares = 0.0;
 int32_t windowPeak = 0;
 unsigned long windowSamplesCount = 0;
+double currentSoundLevelDb = 0.0;
 
 // Raw PCM audio buffer for local YAMNet baby crying classification
 int16_t audioBuffer[AUDIO_BUFFER_SAMPLES];
@@ -447,6 +448,7 @@ void loop() {
       double rms = sqrt(windowSumSquares / windowSamplesCount);
       // Normalized sound level score (approximate dB SPL mapping)
       double soundLevel = 20.0 * log10(rms > 1.0 ? rms : 1.0);
+      currentSoundLevelDb = soundLevel;
 
       // Edge Pitch Analysis for Infant Cry Detection (350 Hz - 680 Hz)
       float periodicity = 0.0f;
@@ -527,7 +529,7 @@ void loop() {
   // Staggered by at least 1500 ms after telemetry to avoid dual-burst HTTPS rate limits
   if (now - lastAudioTransmitTime >= AUDIO_CHUNK_INTERVAL_MS && (now - lastTransmitTime >= 1500)) {
     lastAudioTransmitTime = now;
-    if (now - lastCryDetectedTime < 5000 || soundLevel >= 50.0f) {
+    if (now - lastCryDetectedTime < 5000 || currentSoundLevelDb >= 50.0f) {
       sendAudioChunkToBackend();
     } else {
       audioBufferIdx = 0; // Clear ambient audio buffer to prevent backlog
