@@ -74,8 +74,8 @@ class YamnetClassifier:
         # State tracking for staleness and temporal accumulation
         self.window_history: List[Dict[str, Any]] = []
         self.active_crying_incident: bool = False
-        self.consecutive_non_cry_count: int = 0
-        self.recent_cry_scores: List[float] = []
+        self.last_confirmed_cry_time: Optional[datetime] = None
+        self.rolling_noise_floor_db: float = 40.0
         self.last_update_time: Optional[datetime] = None
         self.last_classification: str = "AUDIO UNAVAILABLE"
         self.last_code: str = "AUDIO_UNAVAILABLE"
@@ -86,8 +86,7 @@ class YamnetClassifier:
         """Resets window accumulation and hysteresis incident trackers."""
         self.window_history.clear()
         self.active_crying_incident = False
-        self.consecutive_non_cry_count = 0
-        self.recent_cry_scores.clear()
+        self.last_confirmed_cry_time = None
 
     @classmethod
     def get_instance(cls) -> "YamnetClassifier":
@@ -120,85 +119,65 @@ class YamnetClassifier:
                 signal
             ).astype(np.float32)
 
-        # Normalize amplitude to [-1.0, 1.0]
+        # Normalize amplitude to [-1.0, 1.0] if clipping
         max_val = float(np.max(np.abs(signal)))
         if max_val > 1.0:
             signal = signal / max_val
 
-        # Pad to at least 0.975 seconds (15600 samples) if needed by YAMNet
+        # Standard 0.975s window (15600 samples at 16kHz)
         if len(signal) < 15600:
             pad_len = 15600 - len(signal)
             signal = np.pad(signal, (0, pad_len), mode="constant")
+        elif len(signal) > 15600:
+            signal = signal[:15600]
 
-        # Calculate standard physical sound metrics (dB & RMS) on raw acoustic signal
+        # Standard physical sound metrics (dB SPL & RMS)
         rms = float(np.sqrt(np.mean(signal ** 2)))
         sound_level_db = round(float(20.0 * np.log10(rms * 32768.0)) if rms > 1e-5 else 0.0, 1)
         peak_amp = int(max_val * 32768) if max_val <= 1.0 else int(max_val)
+        crest_factor_db = float(20.0 * np.log10(max_val / rms)) if rms > 1e-6 else 0.0
 
-        # Dynamic Range Normalization (AGC) for YAMNet Neural Input
-        # YAMNet was trained on audio normalized across standard dynamic range.
-        # If signal is non-silent (peak > 0.005) but quiet, scale it so neural features aren't suppressed.
+        # 1. Adaptive Noise Floor Tracking (Exponential Moving Average)
+        # Tracks true ambient baseline when audio is in calm/moderate room range (20 to 60 dB)
+        if 20.0 <= sound_level_db <= 60.0:
+            alpha = getattr(settings, "NOISE_FLOOR_ALPHA", 0.05)
+            self.rolling_noise_floor_db = (1.0 - alpha) * self.rolling_noise_floor_db + alpha * sound_level_db
+
+        margin_above_floor = sound_level_db - self.rolling_noise_floor_db
+        min_gate_margin = getattr(settings, "ADAPTIVE_NOISE_FLOOR_MARGIN_DB", 8.0)
+        is_above_noise_floor = (margin_above_floor >= min_gate_margin) or (sound_level_db >= 52.0)
+
+        # 3. YAMNet Neural Inference (0.975s window)
         inference_signal = signal.copy()
-        if max_val > 0.005 and max_val < 0.50:
-            gain = min(0.50 / max_val, 10.0)
-            inference_signal = inference_signal * gain
-
-        # Run YAMNet inference locally
         outputs = self.session.run(None, {self.input_name: inference_signal})
         scores = outputs[0]      # Shape: [num_frames, 521]
         embeddings = outputs[1]  # Shape: [num_frames, 1024]
-
-        # Average prediction scores across frames
         mean_scores = np.mean(scores, axis=0)
 
-        # Compute direct cosine similarity against the baby crying dataset
-        mean_emb = np.mean(embeddings, axis=0)
-        emb_norm = float(np.linalg.norm(mean_emb))
-        normed_emb = (mean_emb / emb_norm).astype(np.float32) if emb_norm > 1e-6 else mean_emb
+        # 4. Target Crying vs Competing Classes
+        # AudioSet Class 20: 'Baby cry, infant cry', Class 19: 'Crying, sobbing'
+        infant_cry_score = float(mean_scores[20])
+        crying_sobbing_score = float(mean_scores[19])
+        cry_score = max(infant_cry_score, crying_sobbing_score)
 
-        dataset_match_score = 0.0
-        if self.crying_centroid is not None and self.dataset_crying_embeddings is not None:
-            dataset_sim = float(np.dot(normed_emb, self.crying_centroid))
-            sample_sims = [float(np.dot(normed_emb, pe)) for pe in self.dataset_crying_embeddings]
-            max_sample_match = max(sample_sims) if sample_sims else dataset_sim
-            dataset_match_score = float(max(dataset_sim, max_sample_match))
+        competing_indices = [
+            0, 1, 2, 4, 5, 6, 7,     # Speech, Child speech, Conversation, Male, Female, Shout, Yell
+            13, 14, 15,              # Laughter, Baby laughter, Snicker
+            58, 62,                  # Clapping, Applause
+            132,                     # Music
+            494,                     # Silence
+            348, 349, 351,           # Knock, Door, Slam
+            74                       # Dog bark
+        ]
+        dominant_negative = float(max(mean_scores[idx] for idx in competing_indices))
+        dominant_negative_idx = max(competing_indices, key=lambda idx: mean_scores[idx])
+        dominant_negative_name = self.class_names[dominant_negative_idx]
 
-        # AudioSet Class Indices for Baby Crying and Competing Sound Classes
-        # Crying classes
-        cry_indices = [20, 19, 21, 22]  # Baby cry, Crying/sobbing, Whimper, Wail/moan
-        # Competing non-crying classes
-        speech_indices = [0, 1, 2, 4, 5, 6, 7]  # Speech, Child speech, Conversation, Male, Female, Shout, Yell
-        laughter_indices = [13, 14, 15]  # Laughter, Baby laughter/giggle, Snicker
-        clap_indices = [58, 62]  # Clapping, Applause
-        music_index = 132
-        silence_index = 494
-        door_indices = [348, 349, 351]
+        # 2. Transient / Impulse Veto (Clapping, Door Slams, Knocks)
+        impulse_crest_thresh = getattr(settings, "CREST_FACTOR_IMPULSE_THRESHOLD", 15.0)
+        is_transient_impulse = (crest_factor_db >= impulse_crest_thresh) and (dominant_negative >= cry_score) and (sound_level_db >= 58.0)
 
-        # 1. Primary YAMNet Crying Evidence
-        cry_score = float(max(mean_scores[idx] for idx in cry_indices))
-        cry_energy = float(sum(mean_scores[idx] for idx in cry_indices))
-
-        # 2. Competing Negative Evidence (Inhibition)
-        speech_score = float(max(mean_scores[idx] for idx in speech_indices))
-        laughter_score = float(max(mean_scores[idx] for idx in laughter_indices))
-        clap_score = float(max(mean_scores[idx] for idx in clap_indices))
-        music_score = float(mean_scores[music_index])
-        silence_score = float(mean_scores[silence_index])
-        door_score = float(max(mean_scores[idx] for idx in door_indices))
-        dominant_negative = max(speech_score, laughter_score, clap_score, music_score, door_score)
-
-        # 3. Acoustic Pitch & Spectral Supporting Evidence
-        int_signal = (signal * 32767.0).astype(np.float64)
-        acoustic_res = AcousticClassifier.classify_waveform(int_signal, sample_rate)
-        features = acoustic_res.get("features", {})
-        pitch = features.get("pitch_hz", 0.0)
-        periodicity = features.get("periodicity", 0.0)
-        cry_band_ratio = features.get("cry_band_ratio", 0.0)
-
-        # Infant vocal fundamental pitch is between 300 - 720 Hz with distinct harmonic periodicity
-        has_infant_pitch = (300.0 <= pitch <= 720.0) and (periodicity >= 0.28) and (cry_band_ratio >= 0.28)
-
-        # Top 5 detected sound events from YAMNet for explainability
+        # Top 5 detected sound classes
         top_indices = np.argsort(mean_scores)[::-1][:5]
         top_classes = [
             {"class_name": self.class_names[idx], "score": round(float(mean_scores[idx]), 3)}
@@ -207,105 +186,121 @@ class YamnetClassifier:
         top_sound_name = top_classes[0]["class_name"] if top_classes else "Unknown"
         top_sound_score = top_classes[0]["score"] if top_classes else 0.0
 
-        CRY_CLASS_NAMES = {
-            "Baby cry, infant cry",
-            "Crying, sobbing",
-            "Whimper",
-            "Wail, moan"
-        }
-        is_cry_in_top3 = any(c["class_name"] in CRY_CLASS_NAMES for c in top_classes[:3])
-        is_cry_top1 = top_sound_name in CRY_CLASS_NAMES
+        top_n_req = getattr(settings, "CRY_TOP_N_REQUIRED", 3)
+        is_cry_in_top_n = any(idx in [20, 19] for idx in top_indices[:top_n_req])
+        is_cry_top1 = (top_indices[0] in [20, 19])
 
-        # 4. Calibrated Dataset-Matching & Multi-Evidence Decision Strategy (Per-Window)
-        high_thresh = getattr(settings, "CRY_SCORE_HIGH_THRESHOLD", 0.20)
-        low_thresh = getattr(settings, "CRY_SCORE_LOW_THRESHOLD", 0.12)
+        # 5. Precision-First Calibrated Rule Evaluation (Per-Window)
+        conf_thresh = getattr(settings, "CRY_SCORE_CONFIRMED_THRESHOLD", 0.35)
+        unc_thresh = getattr(settings, "CRY_SCORE_UNCERTAIN_THRESHOLD", 0.18)
+        margin = getattr(settings, "CRY_SCORE_MARGIN", 0.05)
 
-        # Rule A: Microphone input directly matches baby crying dataset (>= 0.72 match and crying acoustic evidence)
-        is_dataset_cry_match = (dataset_match_score >= 0.72) and (cry_score >= 0.08 or cry_energy >= 0.12)
-
-        # Rule B: Standard strong YAMNet crying class dominance
-        is_yamnet_strong_cry = (is_cry_top1 and (cry_score >= high_thresh or cry_energy >= 0.26)) or (is_cry_in_top3 and (cry_score >= 0.20 or cry_energy >= 0.26) and cry_energy >= 0.7 * top_sound_score)
-
-        # Rule C: Supporting infant vocal pitch
-        is_pitch_cry = is_cry_in_top3 and (cry_score >= low_thresh or cry_energy >= 0.16) and has_infant_pitch and (cry_energy >= 0.5 * top_sound_score)
-
-        if is_dataset_cry_match or is_yamnet_strong_cry or is_pitch_cry:
-            raw_code = "BABY_CRYING_DETECTED"
-            raw_confidence = float(np.clip(max(dataset_match_score, 0.75 + 0.25 * cry_score), 0.78, 0.98))
-        elif is_cry_in_top3 and (cry_score >= 0.08 or cry_energy >= 0.12 or dataset_match_score >= 0.65):
-            raw_code = "UNCERTAIN"
-            raw_confidence = round(max(cry_score, dataset_match_score * 0.8), 2)
-        else:
+        rule_fired = "ambient_or_negative"
+        if not is_above_noise_floor:
             raw_code = "NOT_BABY_CRYING"
-            raw_confidence = round(max(top_sound_score, silence_score, 0.85), 2)
+            raw_confidence = 0.95
+            rule_fired = "noise_floor_gate"
+        elif is_transient_impulse:
+            raw_code = "NOT_BABY_CRYING"
+            raw_confidence = 0.90
+            rule_fired = "transient_impulse_veto"
+        else:
+            # Must satisfy ALL of:
+            # (a) cry score >= conf_thresh
+            # (b) cry score beats dominant negative by margin
+            # (c) cry class in top-N
+            is_confirmed_cry = (
+                (cry_score >= conf_thresh) and
+                (cry_score >= dominant_negative + margin) and
+                is_cry_in_top_n
+            )
 
-        # 5. Temporal Accumulation & Hysteresis Decision Mechanism
-        # Reset history if stream had a significant interruption (> 6.0s)
+            # Uncertain: borderline evidence or close competing class
+            is_uncertain = (
+                (cry_score >= unc_thresh) and
+                (is_cry_in_top_n or cry_score >= dominant_negative - 0.05) and
+                (dominant_negative < 0.65)
+            )
+
+            if is_confirmed_cry:
+                raw_code = "BABY_CRYING_DETECTED"
+                raw_confidence = round(float(np.clip(cry_score, 0.70, 0.98)), 2)
+                rule_fired = "yamnet_confirmed_cry"
+            elif is_uncertain:
+                raw_code = "UNCERTAIN"
+                raw_confidence = round(float(np.clip(cry_score, 0.50, 0.75)), 2)
+                rule_fired = "yamnet_uncertain_band"
+            else:
+                raw_code = "NOT_BABY_CRYING"
+                raw_confidence = round(float(np.clip(max(dominant_negative, 0.85), 0.70, 0.98)), 2)
+                rule_fired = "yamnet_dominant_negative"
+
+        # 6. Multi-Window Temporal Voting & Hysteresis
+        staleness_limit = getattr(settings, "AUDIO_STALENESS_SECONDS", 8.0)
         if self.last_update_time is not None:
-            if (now - self.last_update_time).total_seconds() > 6.0:
+            if (now - self.last_update_time).total_seconds() > staleness_limit:
                 self.window_history.clear()
                 self.active_crying_incident = False
-                self.consecutive_non_cry_count = 0
+                self.last_confirmed_cry_time = None
 
-        max_history = getattr(settings, "CRY_HISTORY_WINDOW_SIZE", 5)
-        attack_req = getattr(settings, "CRY_ATTACK_WINDOWS", 2)
-        release_req = getattr(settings, "CRY_RELEASE_WINDOWS", 2)
+        total_votes = getattr(settings, "CRY_WINDOW_VOTES_TOTAL", 4)
+        req_votes = getattr(settings, "CRY_WINDOW_VOTES_REQUIRED", 3)
+        pause_bridge_limit = getattr(settings, "CRY_PAUSE_BRIDGE_SECONDS", 4.0)
 
         self.window_history.append({
             "code": raw_code,
             "cry_score": cry_score,
-            "confidence": raw_confidence,
             "time": now
         })
-        if len(self.window_history) > max_history:
+        if len(self.window_history) > total_votes:
             self.window_history.pop(0)
 
-        # Apply State Transition with Hysteresis
+        cry_votes = sum(1 for w in self.window_history if w["code"] == "BABY_CRYING_DETECTED")
+        immediate_cry = (raw_code == "BABY_CRYING_DETECTED") and is_cry_top1 and (cry_score >= 0.55)
+
         if self.active_crying_incident:
             if raw_code == "BABY_CRYING_DETECTED":
-                self.consecutive_non_cry_count = 0
+                self.last_confirmed_cry_time = now
                 final_code = "BABY_CRYING_DETECTED"
-                final_label = "BABY CRYING DETECTED"
                 final_confidence = raw_confidence
+                decision_rule = "active_incident_maintained"
             else:
-                self.consecutive_non_cry_count += 1
-                if self.consecutive_non_cry_count < release_req and dominant_negative < 0.40:
-                    # Short breathing pause resilience: hold active only if loud competing negative hasn't taken over
+                time_since_cry = (now - self.last_confirmed_cry_time).total_seconds() if self.last_confirmed_cry_time else 999.0
+                # Breath pause bridge: only extend within 4.0s IF YAMNet still shows residual cry evidence, NEVER on loudness alone!
+                if time_since_cry <= pause_bridge_limit and (raw_code == "UNCERTAIN" or cry_score >= 0.15) and (dominant_negative < 0.40):
                     final_code = "BABY_CRYING_DETECTED"
-                    final_label = "BABY CRYING DETECTED"
-                    final_confidence = round(max(0.70, (self.last_confidence or 0.85) * 0.90), 2)
+                    final_confidence = round(max(0.70, (self.last_confidence or 0.85) * 0.92), 2)
+                    decision_rule = f"breath_pause_bridge_{time_since_cry:.1f}s"
                 else:
-                    # Non-crying verified: incident concluded
                     self.active_crying_incident = False
                     final_code = raw_code
-                    final_label = "NOT BABY CRYING" if raw_code == "NOT_BABY_CRYING" else "UNCERTAIN"
                     final_confidence = raw_confidence
+                    decision_rule = "incident_released"
         else:
-            recent_codes = [w["code"] for w in self.window_history[-3:]]
-            recent_crying_count = recent_codes.count("BABY_CRYING_DETECTED")
-
-            has_immediate_cry = (raw_code == "BABY_CRYING_DETECTED") and (
-                is_dataset_cry_match or (is_cry_top1 and cry_score >= 0.22) or (cry_energy >= 0.28) or (has_infant_pitch and cry_score >= 0.14)
-            )
-
-            if recent_crying_count >= attack_req or has_immediate_cry:
-                # Consistent crying verified across consecutive windows or clear strong crying -> immediate alert
+            if cry_votes >= req_votes or (immediate_cry and cry_votes >= 2):
                 self.active_crying_incident = True
-                self.consecutive_non_cry_count = 0
+                self.last_confirmed_cry_time = now
                 final_code = "BABY_CRYING_DETECTED"
-                final_label = "BABY CRYING DETECTED"
                 final_confidence = raw_confidence
+                decision_rule = "multi_window_confirmed"
             elif raw_code == "BABY_CRYING_DETECTED":
-                # Single borderline spike without temporal corroboration -> UNCERTAIN (prevents false alarms)
+                # Isolated single spike without multi-window confirmation -> UNCERTAIN (never triggers alert banner!)
                 final_code = "UNCERTAIN"
-                final_label = "UNCERTAIN"
                 final_confidence = raw_confidence
+                decision_rule = "single_spike_dampened_to_uncertain"
             else:
                 final_code = raw_code
-                final_label = "NOT BABY CRYING" if raw_code == "NOT_BABY_CRYING" else "UNCERTAIN"
                 final_confidence = raw_confidence
+                decision_rule = rule_fired
 
-        # Update service cache with inference completion timestamp
+        if final_code == "BABY_CRYING_DETECTED":
+            final_label = "BABY CRYING DETECTED"
+        elif final_code == "UNCERTAIN":
+            final_label = "UNCERTAIN"
+        else:
+            final_label = "NOT BABY CRYING"
+
+        # Update cache
         completion_time = datetime.now(timezone.utc)
         self.last_update_time = completion_time
         self.last_classification = final_label
@@ -314,27 +309,30 @@ class YamnetClassifier:
         self.last_top_classes = top_classes
 
         logger.info(
-            f"[INFERENCE] Completed in {len(signal)/sample_rate:.2f}s audio | "
+            f"[INFERENCE] Audio: {len(signal)/sample_rate:.2f}s | "
             f"Result: {final_label} ({final_confidence*100:.0f}%) | "
-            f"Dataset Match: {dataset_match_score*100:.0f}% | "
-            f"dB: {sound_level_db} | Top: {top_classes[0]['class_name'] if top_classes else 'N/A'} | "
-            f"Active Incident: {self.active_crying_incident}"
+            f"CryScore: {cry_score:.3f} | DomNeg: {dominant_negative:.3f} ({dominant_negative_name}) | "
+            f"CrestFactor: {crest_factor_db:.1f}dB | Rule: {decision_rule} | ActiveIncident: {self.active_crying_incident}"
         )
 
         return {
             "classification": final_code,
             "display_label": final_label,
             "confidence": final_confidence,
-            "dataset_match_score": round(dataset_match_score, 3),
+            "crying_score": round(cry_score, 3),
+            "dominant_negative_score": round(dominant_negative, 3),
+            "dominant_negative_class": dominant_negative_name,
             "sound_level_db": sound_level_db,
             "rms_amplitude": round(rms * 32768.0, 1),
             "peak_amplitude": peak_amp,
             "top_classes": top_classes,
             "crying_score_raw": round(cry_score, 3),
             "is_baby_crying": (final_code == "BABY_CRYING_DETECTED"),
+            "decision_rule": decision_rule,
             "timestamp": completion_time.isoformat(),
             "status": "ACTIVE"
         }
+
 
     def classify_wav_bytes(self, wav_bytes: bytes) -> Dict[str, Any]:
         """Classifies a WAV container or raw 16-bit mono 16kHz PCM from bytes."""
@@ -360,6 +358,23 @@ class YamnetClassifier:
 
                     if n_channels > 1:
                         signal = signal.reshape(-1, n_channels).mean(axis=1)
+
+                    if sample_rate != 16000 and sample_rate > 0:
+                        target_len = int(len(signal) * 16000 / sample_rate)
+                        signal = np.interp(
+                            np.linspace(0, len(signal), target_len, endpoint=False),
+                            np.arange(len(signal)),
+                            signal
+                        ).astype(np.float32)
+                        sample_rate = 16000
+
+                    if len(signal) >= 24000:
+                        chunk_size = 16000
+                        last_res = None
+                        for start_idx in range(0, len(signal) - 8000, chunk_size):
+                            chunk = signal[start_idx : start_idx + chunk_size]
+                            last_res = self.classify_waveform(chunk, sample_rate=16000)
+                        return last_res or self.classify_waveform(signal, sample_rate=16000)
 
                     return self.classify_waveform(signal, sample_rate=sample_rate)
             except Exception:

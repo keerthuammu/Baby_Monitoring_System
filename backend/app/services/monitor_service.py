@@ -174,39 +174,29 @@ class MonitorService:
         detected_conf = confidence if confidence is not None else reading_in.confidence
         pitch = getattr(reading_in, "pitch_hz", None) or 0.0
 
-        # Primary authority: YAMNet neural network inference (if provided)
-        # Secondary authority: Verified infant cry pitch & edge episode latch
+        # Primary authority: YAMNet neural network inference.
+        # Edge pitch and sound level are supporting telemetry ONLY; they can NEVER create or sustain BABY CRYING DETECTED alone.
         is_yamnet_crying = (classification == "BABY_CRYING_DETECTED")
-        is_yamnet_non_crying = (classification is not None and classification != "BABY_CRYING_DETECTED")
-
-        # Edge crying is valid when:
-        # 1. Edge explicitly flags crying episode (autocorrelation latch e.g. "POSSIBLE_CRYING"), OR
-        # 2. Pitch is within the infant distress vocal frequency range (350 - 720 Hz) with elevated sound
-        is_edge_crying = (
-            not is_yamnet_non_crying and (
-                ("CRYING" in detected_class and reading_in.sound_level >= 45.0) or
-                (350.0 <= pitch <= 720.0 and reading_in.sound_level >= 48.0)
-            )
-        )
+        is_yamnet_uncertain = (classification == "UNCERTAIN")
         is_high_sound = reading_in.sound_level >= settings.SOUND_HIGH_THRESHOLD
 
         final_reading_class = None
-        final_reading_conf = detected_conf
-
+        final_reading_conf = None
         ev = None
-        if is_yamnet_crying or is_edge_crying:
+
+        if is_yamnet_crying:
             final_reading_class = "BABY_CRYING_DETECTED"
-            final_reading_conf = detected_conf if detected_conf is not None else 0.92
+            final_reading_conf = confidence if confidence is not None else 0.92
             event_class = "POSSIBLE_CRYING"
             ev = MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, final_reading_conf)
-        elif "UNCERTAIN" in detected_class:
+        elif is_yamnet_uncertain:
             final_reading_class = "UNCERTAIN"
-            final_reading_conf = detected_conf if detected_conf is not None else 0.70
+            final_reading_conf = confidence if confidence is not None else 0.70
         else:
             # Sound intensity is decoupled from baby sound classification:
-            # A loud door slam / loud noise (>= 65 dB) is HIGH SOUND, but NOT BABY CRYING
+            # Loud noise (e.g. door slam >= 65 dB) is HIGH SOUND, but NOT BABY CRYING
             final_reading_class = "NOT_BABY_CRYING"
-            final_reading_conf = detected_conf if detected_conf is not None else 0.88
+            final_reading_conf = confidence if confidence is not None else 0.88
             if is_high_sound:
                 event_class = "HIGH_SOUND_ACTIVITY"
                 ev = MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, final_reading_conf)

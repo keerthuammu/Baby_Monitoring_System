@@ -206,7 +206,8 @@ float detectInfantCryPitch(const int16_t* buffer, int len, float sampleRate, flo
   float periodicity = (float)globalMaxCorr / (float)energy0;
   if (outPeriodicity) *outPeriodicity = periodicity;
 
-  if (periodicity < 0.20f || globalMaxCorr <= 0) {
+  // Stricter normalized autocorrelation threshold (0.65) rejects room noise, hum, and broad speech
+  if (periodicity < 0.65f || globalMaxCorr <= 0) {
     return 0.0f;
   }
 
@@ -408,9 +409,19 @@ void loop() {
     int samples_read = bytes_read / sizeof(int32_t);
 
     for (int i = 0; i < samples_read; i++) {
-      // INMP441 provides 24-bit audio in high bits of 32-bit slot
-      // Shift >> 12 (4x gain boost) ensures clear dynamic range for acoustic playback and nursery distance
-      int32_t sample = raw_samples[i] >> 12;
+      // INMP441 provides 24-bit audio MSB-aligned in 32-bit slot (bits 31..8)
+      // Standard 16-bit extraction without digital distortion: Shift >> 16
+      int32_t sample_raw = raw_samples[i] >> 16;
+
+      // 1st-order IIR DC-removal high-pass filter (cutoff ~20 Hz at 16kHz)
+      // y[n] = x[n] - x[n-1] + 0.995 * y[n-1]
+      static float prev_x = 0.0f;
+      static float prev_y = 0.0f;
+      float x = (float)sample_raw;
+      float y = x - prev_x + 0.995f * prev_y;
+      prev_x = x;
+      prev_y = y;
+      int32_t sample = (int32_t)constrain(y, -32768.0f, 32767.0f);
       int32_t abs_sample = abs(sample);
 
       if (abs_sample > windowPeak) {
@@ -420,7 +431,7 @@ void loop() {
 
       // Accumulate raw audio samples for local YAMNet classification
       if (audioBufferIdx < AUDIO_BUFFER_SAMPLES) {
-        audioBuffer[audioBufferIdx++] = (int16_t)constrain(sample, -32768, 32767);
+        audioBuffer[audioBufferIdx++] = (int16_t)sample;
       }
     }
     windowSamplesCount += samples_read;
@@ -460,24 +471,30 @@ void loop() {
       const char* classification = "QUIET";
       float confidence = 0.85f;
 
-      bool isCryPitch = (pitch >= 380.0f && pitch <= 680.0f) && (periodicity >= 0.35f);
+      // Stricter pitch voicing test: periodicity >= 0.65 in infant distress band (380 - 680 Hz)
+      bool isCryPitch = (pitch >= 380.0f && pitch <= 680.0f) && (periodicity >= 0.65f);
+      static int consecutiveVoicedFrames = 0;
 
-      if (isCryPitch && soundLevel >= 50.0f) {
-        lastCryDetectedTime = now;
-        Serial.printf("[ACOUSTIC PITCH] Infant crying frequency detected: %.1f Hz (periodicity: %.2f)\n", pitch, periodicity);
+      if (isCryPitch && soundLevel >= 52.0f) {
+        consecutiveVoicedFrames++;
+        if (consecutiveVoicedFrames >= 2) {
+          lastCryDetectedTime = now;
+          Serial.printf("[ACOUSTIC PITCH] Verified infant crying frequency: %.1f Hz (periodicity: %.2f)\n", pitch, periodicity);
+        }
+      } else {
+        consecutiveVoicedFrames = 0;
       }
 
-      // Infant crying episode latch: Hold crying state for 8 seconds after cry pitch detected,
-      // provided sound remains elevated (handles baby inhale/gasp breath intervals)
-      bool isCryEpisodeActive = (now - lastCryDetectedTime < 8000) && (soundLevel >= 48.0f);
+      // Short breath-pause latch (max 4.0s) strictly requires elevated sound
+      bool isCryEpisodeActive = (now - lastCryDetectedTime < 4000) && (consecutiveVoicedFrames >= 2);
 
       if (isCryEpisodeActive) {
-        babyStatus = "🚨 BABY IS CRYING";
+        babyStatus = "🚨 POSSIBLE BABY CRY";
         classification = "POSSIBLE_CRYING";
-        confidence = isCryPitch ? 0.92f : 0.88f;
+        confidence = 0.90f;
       } else if (soundLevel >= 65.0f) {
         // High non-crying sound (door slam, loud conversation, clapping, domestic noise)
-        classification = "HIGH_SOUND_ACTIVITY";
+        classification = "HIGH_SOUND";
         babyStatus = "NOT BABY CRYING";
         confidence = 0.88f;
       } else if (soundLevel >= 45.0f) {
@@ -510,7 +527,7 @@ void loop() {
   // Staggered by at least 1500 ms after telemetry to avoid dual-burst HTTPS rate limits
   if (now - lastAudioTransmitTime >= AUDIO_CHUNK_INTERVAL_MS && (now - lastTransmitTime >= 1500)) {
     lastAudioTransmitTime = now;
-    if (now - lastCryDetectedTime < 8000) {
+    if (now - lastCryDetectedTime < 5000 || soundLevel >= 50.0f) {
       sendAudioChunkToBackend();
     } else {
       audioBufferIdx = 0; // Clear ambient audio buffer to prevent backlog
