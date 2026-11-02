@@ -86,8 +86,8 @@ class MonitorService:
             age = (now - to_utc(latest_reading.recorded_at)).total_seconds()
             if age <= staleness_seconds:
                 raw_cls = (latest_reading.classification or "").upper()
-                is_cry = "CRYING" in raw_cls
-                is_unc = "UNCERTAIN" in raw_cls
+                is_cry = (raw_cls in ["BABY_CRYING_DETECTED", "POSSIBLE_CRYING"] or ("CRYING" in raw_cls and "NOT" not in raw_cls))
+                is_unc = ("UNCERTAIN" in raw_cls)
                 code = "BABY_CRYING_DETECTED" if is_cry else ("UNCERTAIN" if is_unc else "NOT_BABY_CRYING")
                 disp = "BABY CRYING DETECTED" if is_cry else ("UNCERTAIN" if is_unc else "NOT BABY CRYING")
                 conf = latest_reading.confidence or (0.92 if is_cry else 0.85)
@@ -259,12 +259,13 @@ class MonitorService:
         rather than creating hundreds of duplicate event rows.
         Upgrades event to POSSIBLE_CRYING if infant vocalization is detected.
         """
-        recent_threshold = current_time - timedelta(seconds=10)
-        # Check for ANY active ongoing event for this device (within 10s)
+        recent_threshold = current_time - timedelta(seconds=6)
+        # Check for active ongoing event of the same classification (within 6s)
         active_event = (
             db.query(CryingEvent)
             .filter(
                 CryingEvent.device_id == device_id,
+                CryingEvent.classification == classification,
                 CryingEvent.end_time >= recent_threshold,
                 CryingEvent.acknowledged == False
             )
@@ -273,20 +274,8 @@ class MonitorService:
         )
 
         if active_event:
-            # If active event is already crying, preserve crying classification across brief pauses
-            if active_event.classification == "POSSIBLE_CRYING":
-                active_event.end_time = current_time
-                active_event.confidence = max(active_event.confidence, confidence)
-            elif classification == "POSSIBLE_CRYING":
-                # Upgrade existing HIGH_SOUND_ACTIVITY to confirmed infant crying!
-                active_event.classification = "POSSIBLE_CRYING"
-                active_event.end_time = current_time
-                active_event.confidence = max(active_event.confidence, confidence)
-            else:
-                # Both are HIGH_SOUND_ACTIVITY: extend duration
-                active_event.end_time = current_time
-                active_event.confidence = max(active_event.confidence, confidence)
-
+            active_event.end_time = current_time
+            active_event.confidence = max(active_event.confidence, confidence)
             start = to_utc(active_event.start_time)
             curr = to_utc(current_time)
             if start and curr:
@@ -329,7 +318,7 @@ class MonitorService:
             crying_events = (
                 db.query(CryingEvent)
                 .filter(
-                    CryingEvent.classification.ilike("%CRYING%"),
+                    CryingEvent.classification.in_(["POSSIBLE_CRYING", "BABY_CRYING_DETECTED"]),
                     CryingEvent.start_time <= max_time + timedelta(seconds=5),
                 )
                 .all()
@@ -337,27 +326,14 @@ class MonitorService:
 
         for r in readings:
             raw_c = (r.classification or "").upper()
-            if "CRYING" in raw_c:
+            if raw_c in ["BABY_CRYING_DETECTED", "POSSIBLE_CRYING"] or ("CRYING" in raw_c and "NOT" not in raw_c):
                 r.classification = "BABY_CRYING_DETECTED"
             elif "UNCERTAIN" in raw_c:
                 r.classification = "UNCERTAIN"
             else:
-                # Check if reading falls within an active/recorded crying incident window
-                is_during_cry = False
-                if r.recorded_at and crying_events:
-                    r_utc = to_utc(r.recorded_at)
-                    for ev in crying_events:
-                        ev_start = to_utc(ev.start_time) - timedelta(seconds=3)
-                        ev_end = to_utc(ev.end_time or ev.start_time) + timedelta(seconds=max(3.0, (ev.duration_seconds or 0.0) + 3.0))
-                        if ev_start <= r_utc <= ev_end and (r.sound_level or 0.0) >= 45.0:
-                            r.classification = "BABY_CRYING_DETECTED"
-                            r.confidence = ev.confidence or 0.92
-                            is_during_cry = True
-                            break
-                if not is_during_cry:
-                    r.classification = "NOT_BABY_CRYING"
-                    if not r.confidence:
-                        r.confidence = 0.88
+                r.classification = "NOT_BABY_CRYING"
+                if not r.confidence:
+                    r.confidence = 0.88
         return readings
 
     @staticmethod

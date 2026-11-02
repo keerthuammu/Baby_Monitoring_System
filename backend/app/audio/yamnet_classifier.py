@@ -371,10 +371,13 @@ class YamnetClassifier:
                     if len(signal) >= 24000:
                         chunk_size = 16000
                         last_res = None
+                        best_cry_res = None
                         for start_idx in range(0, len(signal) - 8000, chunk_size):
                             chunk = signal[start_idx : start_idx + chunk_size]
                             last_res = self.classify_waveform(chunk, sample_rate=16000)
-                        return last_res or self.classify_waveform(signal, sample_rate=16000)
+                            if last_res.get("classification") == "BABY_CRYING_DETECTED":
+                                best_cry_res = last_res
+                        return best_cry_res or last_res or self.classify_waveform(signal, sample_rate=16000)
 
                     return self.classify_waveform(signal, sample_rate=sample_rate)
             except Exception:

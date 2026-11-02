@@ -3,7 +3,10 @@ import { Database, Radio } from 'lucide-react';
 
 export default function ReadingsTable({ readings, events, isOnline }) {
   const displayedReadings = (readings || []).slice(0, 15);
-  const cryingEvents = (events || []).filter(e => (e.classification || '').toUpperCase().includes('CRYING'));
+  const cryingEvents = (events || []).filter(e => {
+    const c = (e.classification || '').toUpperCase();
+    return c === 'POSSIBLE_CRYING' || c === 'BABY_CRYING_DETECTED' || (c.includes('CRYING') && !c.includes('NOT'));
+  });
 
   return (
     <div className="glass-panel rounded-2xl p-5 transition-all">
@@ -44,21 +47,8 @@ export default function ReadingsTable({ readings, events, isOnline }) {
             <tbody className="divide-y divide-slate-800/60 text-slate-300">
               {displayedReadings.map((r) => {
                 const rClass = (r.classification || '').toUpperCase();
-                const explicitCry = rClass.includes('CRYING');
-
-                // Check if reading falls within an active or recorded crying incident window
-                const rTime = new Date(r.recorded_at).getTime();
-                const isDuringCryEvent = cryingEvents.some(e => {
-                  const startMs = new Date(e.start_time).getTime() - 2500;
-                  const durationMs = ((e.duration_seconds || 0) * 1000) || 5000;
-                  const endMs = Math.max(
-                    new Date(e.end_time || e.start_time).getTime() + 2500,
-                    new Date(e.start_time).getTime() + durationMs + 2500
-                  );
-                  return rTime >= startMs && rTime <= endMs;
-                });
-
-                const isEdgeCry = explicitCry || (isDuringCryEvent && (r.sound_level == null || r.sound_level >= 45.0));
+                const explicitCry = (rClass === 'BABY_CRYING_DETECTED' || rClass === 'POSSIBLE_CRYING' || (rClass.includes('CRYING') && !rClass.includes('NOT')));
+                const isEdgeCry = explicitCry;
 
                 // Feature A: Sound Intensity (Decoupled Volume Level)
                 let intensityLabel = "Low Sound";

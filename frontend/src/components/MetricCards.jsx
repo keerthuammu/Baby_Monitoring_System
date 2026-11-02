@@ -67,7 +67,7 @@ export default function MetricCards({
       engine: audioStatus?.engine || "Offline / Awaiting Stream",
       lastUpdated: updatedTime
     };
-  } else if (statusCode === "BABY_CRYING_DETECTED" || statusClassification.includes("CRYING")) {
+  } else if (statusCode === "BABY_CRYING_DETECTED" || statusClassification === "BABY CRYING DETECTED") {
     // State 1: BABY CRYING DETECTED
     classificationBadge = {
       label: "BABY CRYING DETECTED",
@@ -80,7 +80,7 @@ export default function MetricCards({
       engine: audioStatus?.engine || "Google YAMNet ONNX (Active)",
       lastUpdated: updatedTime
     };
-  } else if (statusCode === "UNCERTAIN" || statusClassification.includes("UNCERTAIN")) {
+  } else if (statusCode === "UNCERTAIN" || statusClassification === "UNCERTAIN") {
     // State 3: UNCERTAIN
     classificationBadge = {
       label: "UNCERTAIN",
