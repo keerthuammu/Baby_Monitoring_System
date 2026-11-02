@@ -46,6 +46,7 @@ def init_db():
             if engine.dialect.name == "postgresql":
                 conn.execute(text("ALTER TABLE sensor_readings ADD COLUMN IF NOT EXISTS classification VARCHAR(50);"))
                 conn.execute(text("ALTER TABLE sensor_readings ADD COLUMN IF NOT EXISTS confidence FLOAT;"))
+                conn.execute(text("ALTER TABLE sensor_readings ADD COLUMN IF NOT EXISTS source VARCHAR(32) DEFAULT 'esp32_device';"))
             elif engine.dialect.name == "sqlite":
                 res = conn.execute(text("PRAGMA table_info(sensor_readings);")).fetchall()
                 col_names = [r[1] for r in res] if res else []
@@ -53,6 +54,8 @@ def init_db():
                     conn.execute(text("ALTER TABLE sensor_readings ADD COLUMN classification VARCHAR(50);"))
                 if "confidence" not in col_names:
                     conn.execute(text("ALTER TABLE sensor_readings ADD COLUMN confidence FLOAT;"))
+                if "source" not in col_names:
+                    conn.execute(text("ALTER TABLE sensor_readings ADD COLUMN source VARCHAR(32) DEFAULT 'esp32_device';"))
     except Exception as e:
         logger.warning(f"Database schema auto-sync note: {e}")
 

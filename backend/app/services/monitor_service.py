@@ -1,7 +1,7 @@
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, func
+from sqlalchemy import desc, func, text
 from app.models.models import Device, SensorReading, CryingEvent
 from app.schemas.schemas import ReadingCreate
 from app.core.config import settings
@@ -274,21 +274,49 @@ class MonitorService:
             if reading_in.sound_level >= settings.SOUND_HIGH_THRESHOLD:
                 ev = MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, "HIGH_SOUND_ACTIVITY", 0.85)
 
-        # Create reading with persistent classification
-        reading = SensorReading(
-            device_id=reading_in.device_id,
-            sound_level=reading_in.sound_level,
-            rms_amplitude=reading_in.rms_amplitude,
-            peak_amplitude=reading_in.peak_amplitude,
-            classification=final_reading_class,
-            confidence=final_reading_conf,
-            source=source or getattr(reading_in, "source", None) or "esp32_device",
-            recorded_at=recorded_at,
-            received_at=now
-        )
-        db.add(reading)
-        db.commit()
-        db.refresh(reading)
+        # Create reading with persistent classification (resilient to schema migrations)
+        try:
+            reading = SensorReading(
+                device_id=reading_in.device_id,
+                sound_level=reading_in.sound_level,
+                rms_amplitude=reading_in.rms_amplitude,
+                peak_amplitude=reading_in.peak_amplitude,
+                classification=final_reading_class,
+                confidence=final_reading_conf,
+                source=source or getattr(reading_in, "source", None) or "esp32_device",
+                recorded_at=recorded_at,
+                received_at=now
+            )
+            db.add(reading)
+            db.commit()
+            db.refresh(reading)
+        except Exception as e:
+            db.rollback()
+            err_str = str(e).lower()
+            if "source" in err_str:
+                try:
+                    db.execute(text("ALTER TABLE sensor_readings ADD COLUMN source VARCHAR(32) DEFAULT 'esp32_device';"))
+                    db.commit()
+                    db.add(reading)
+                    db.commit()
+                    db.refresh(reading)
+                except Exception:
+                    db.rollback()
+                    reading = SensorReading(
+                        device_id=reading_in.device_id,
+                        sound_level=reading_in.sound_level,
+                        rms_amplitude=reading_in.rms_amplitude,
+                        peak_amplitude=reading_in.peak_amplitude,
+                        classification=final_reading_class,
+                        confidence=final_reading_conf,
+                        recorded_at=recorded_at,
+                        received_at=now
+                    )
+                    db.add(reading)
+                    db.commit()
+                    db.refresh(reading)
+            else:
+                raise
 
         # Synchronize single authoritative classification state
         is_cry = (final_reading_class == "BABY_CRYING_DETECTED")

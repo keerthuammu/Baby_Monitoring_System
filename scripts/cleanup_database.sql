@@ -32,3 +32,4 @@ DELETE FROM crying_events
 WHERE device_id = 'esp32-nursery-01'
   AND acknowledged = false
   AND duration_seconds < 1.0;
+
