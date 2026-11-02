@@ -1,7 +1,8 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Query, Request, status, BackgroundTasks
+from fastapi import APIRouter, Depends, Query, Request, status, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from app.core.database import get_db
+from app.core.config import settings
 from app.core.security import verify_device_api_key
 from app.schemas.schemas import ReadingCreate, ReadingResponse
 from app.services.monitor_service import MonitorService
@@ -22,10 +23,31 @@ def submit_reading(
     Supports on-device edge classification (POSSIBLE_CRYING, HIGH_SOUND_ACTIVITY, pitch_hz).
     Requires X-API-Key header.
     Mirrors reading to Render cloud backend in background when running locally.
+    Enforces DEMO_MODE guard against simulated data injection in production.
     """
+    # Guard: Require valid non-empty device_id
+    if not reading_in.device_id or len(reading_in.device_id.strip()) < 3:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid reading: 'device_id' is required and must be at least 3 characters"
+        )
+
+    # Guard: Reject mock/simulated data unless DEMO_MODE is explicitly enabled
+    is_simulation = (
+        reading_in.source == "demo" or 
+        "simulat" in reading_in.device_id.lower() or 
+        reading_in.device_id == "esp32-devkit-v1-simulated"
+    )
+    if is_simulation and not getattr(settings, "DEMO_MODE", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Simulation data rejected: DEMO_MODE is disabled on this server. Set DEMO_MODE=true in environment to permit mock hardware data."
+        )
+
     reading = MonitorService.record_reading(
         db,
-        reading_in
+        reading_in,
+        source="demo" if is_simulation else (reading_in.source or "esp32_device")
     )
 
     # Prevent loop: only mirror if request did NOT originate from another bridge forwarder

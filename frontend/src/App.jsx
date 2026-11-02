@@ -122,7 +122,7 @@ export default function App() {
   const eventTime = unacknowledgedEvent?.end_time || unacknowledgedEvent?.start_time;
   const isEventRecent = eventTime ? (Date.now() - new Date(eventTime).getTime() < 10000) : false;
 
-  const activeAlert = isLiveCrying
+  const activeAlert = isOnline ? (isLiveCrying
     ? (unacknowledgedEvent || {
         id: audioStatus?.event_id || 1,
         classification: 'BABY_CRYING_DETECTED',
@@ -132,7 +132,7 @@ export default function App() {
         device_id: 'esp32-nursery-01',
         acknowledged: false
       })
-    : (unacknowledgedEvent && isEventRecent ? unacknowledgedEvent : null);
+    : (unacknowledgedEvent && isEventRecent ? unacknowledgedEvent : null)) : null;
 
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col text-slate-100">

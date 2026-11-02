@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     CRY_WINDOW_VOTES_TOTAL: int = 3              # Out of the last 3 windows
     CRY_PAUSE_BRIDGE_SECONDS: float = 4.0        # Max breath pause bridge duration (seconds)
     
+    # Simulation & Demonstration Guards
+    DEMO_MODE: bool = False
+
+    # Minimum Energy & Dead Microphone Detection
+    MIN_ENERGY_RMS_THRESHOLD: float = 1.0        # RMS below this is silence/mic disconnected
+    DEAD_MIC_CONSECUTIVE_PACKETS: int = 3        # Consecutive packets with 0.0 RMS/Peak before flagging dead mic
+
     # Edge Pitch Telemetry & Freshness
     ENABLE_PITCH_CONFIDENCE_BOOST: bool = True   # Edge pitch can add confidence, but never triggers cry alone
     AUDIO_STALENESS_SECONDS: float = 8.0

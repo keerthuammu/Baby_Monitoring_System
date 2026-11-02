@@ -19,6 +19,7 @@ def to_utc(dt: Optional[datetime]) -> Optional[datetime]:
 
 class MonitorService:
     _latest_authoritative_state: Optional[dict] = None
+    _consecutive_dead_packets: dict = {}
 
     @classmethod
     def set_authoritative_state(cls, state: dict):
@@ -85,19 +86,41 @@ class MonitorService:
         if latest_reading and latest_reading.recorded_at:
             age = (now - to_utc(latest_reading.recorded_at)).total_seconds()
             if age <= staleness_seconds:
+                # Check for dead/unplugged mic (rms=0 and peak=0)
+                if (latest_reading.rms_amplitude == 0.0 and latest_reading.peak_amplitude == 0) or latest_reading.classification == "AUDIO_UNAVAILABLE":
+                    return {
+                        "classification": "AUDIO UNAVAILABLE",
+                        "code": "AUDIO_UNAVAILABLE",
+                        "confidence": None,
+                        "timestamp": latest_reading.recorded_at.isoformat(),
+                        "reading_id": latest_reading.id,
+                        "event_id": None,
+                        "is_baby_crying": False,
+                        "is_fresh": True,
+                        "model_status": "MIC_FAULT",
+                        "processing_status": "MIC_FAULT",
+                        "engine": "Microphone Fault Detector",
+                        "source": "sensor_reading",
+                        "sound_intensity": "OFFLINE",
+                        "sound_level_db": 0.0,
+                        "seconds_since_update": round(age, 1),
+                        "top_classes": [],
+                        "reason": "Microphone not producing signal (disconnected/dead)"
+                    }
+
                 raw_cls = (latest_reading.classification or "").upper()
-                is_cry = (raw_cls in ["BABY_CRYING_DETECTED", "POSSIBLE_CRYING"] or ("CRYING" in raw_cls and "NOT" not in raw_cls))
-                is_unc = ("UNCERTAIN" in raw_cls)
+                is_cry = (raw_cls == "BABY_CRYING_DETECTED")
+                is_unc = (raw_cls == "UNCERTAIN")
                 code = "BABY_CRYING_DETECTED" if is_cry else ("UNCERTAIN" if is_unc else "NOT_BABY_CRYING")
                 disp = "BABY CRYING DETECTED" if is_cry else ("UNCERTAIN" if is_unc else "NOT BABY CRYING")
-                conf = latest_reading.confidence or (0.92 if is_cry else 0.85)
+                conf = latest_reading.confidence
                 sound_level = latest_reading.sound_level or 0.0
                 intensity = "HIGH SOUND" if sound_level >= 65.0 else ("MODERATE SOUND" if sound_level >= 45.0 else "LOW SOUND")
 
                 state = {
                     "classification": disp,
                     "code": code,
-                    "confidence": round(float(conf), 2),
+                    "confidence": round(float(conf), 2) if conf is not None else None,
                     "timestamp": latest_reading.recorded_at.isoformat(),
                     "reading_id": latest_reading.id,
                     "event_id": None,
@@ -110,16 +133,18 @@ class MonitorService:
                     "sound_intensity": intensity,
                     "sound_level_db": sound_level,
                     "seconds_since_update": round(age, 1),
-                    "top_classes": []
+                    "top_classes": [],
+                    "reason": None
                 }
                 cls._latest_authoritative_state = state
                 return state
 
         # Guard: If no fresh audio or telemetry arrived in the last staleness_seconds -> STRICTLY AUDIO UNAVAILABLE
+        cls._latest_authoritative_state = None
         return {
             "classification": "AUDIO UNAVAILABLE",
             "code": "AUDIO_UNAVAILABLE",
-            "confidence": 0.0,
+            "confidence": None,
             "timestamp": now.isoformat(),
             "reading_id": None,
             "event_id": None,
@@ -132,7 +157,8 @@ class MonitorService:
             "sound_intensity": "OFFLINE",
             "sound_level_db": 0.0,
             "seconds_since_update": round(staleness_seconds + 1.0, 1),
-            "top_classes": []
+            "top_classes": [],
+            "reason": "Device offline or awaiting audio stream"
         }
 
     @staticmethod
@@ -156,12 +182,14 @@ class MonitorService:
             db.commit()
         return device
 
-    @staticmethod
+    @classmethod
     def record_reading(
+        cls,
         db: Session, 
         reading_in: ReadingCreate,
         classification: Optional[str] = None,
-        confidence: Optional[float] = None
+        confidence: Optional[float] = None,
+        source: Optional[str] = None
     ) -> SensorReading:
         now = utc_now()
         recorded_at = reading_in.recorded_at or now
@@ -169,37 +197,82 @@ class MonitorService:
         # Ensure device exists and update its heartbeat
         MonitorService.get_or_create_device(db, reading_in.device_id)
 
-        # Acoustic Event Handling
-        detected_class = (classification or reading_in.classification or "").upper()
-        detected_conf = confidence if confidence is not None else reading_in.confidence
-        pitch = getattr(reading_in, "pitch_hz", None) or 0.0
+        # 1. Dead Microphone & Zero-Energy Signal Gate
+        is_zero_signal = (reading_in.rms_amplitude == 0.0 and reading_in.peak_amplitude == 0)
+        min_rms = getattr(settings, "MIN_ENERGY_RMS_THRESHOLD", 1.0)
+        is_below_energy = (reading_in.rms_amplitude < min_rms and reading_in.peak_amplitude == 0) or is_zero_signal
 
-        # Primary authority: YAMNet neural network inference.
-        # Edge pitch and sound level are supporting telemetry ONLY; they can NEVER create or sustain BABY CRYING DETECTED alone.
-        is_yamnet_crying = (classification == "BABY_CRYING_DETECTED")
-        is_yamnet_uncertain = (classification == "UNCERTAIN")
-        is_high_sound = reading_in.sound_level >= settings.SOUND_HIGH_THRESHOLD
+        dead_threshold = getattr(settings, "DEAD_MIC_CONSECUTIVE_PACKETS", 3)
+        if is_zero_signal:
+            cls._consecutive_dead_packets[reading_in.device_id] = cls._consecutive_dead_packets.get(reading_in.device_id, 0) + 1
+        else:
+            cls._consecutive_dead_packets[reading_in.device_id] = 0
 
+        is_mic_fault = (cls._consecutive_dead_packets.get(reading_in.device_id, 0) >= dead_threshold)
+
+        # 2. Decision Logic
         final_reading_class = None
         final_reading_conf = None
+        std_label = None
+        std_code = None
+        model_status = "ONLINE"
+        engine_name = "Acoustic Telemetry Stream"
+        intensity = "LOW SOUND"
+        reason = None
         ev = None
 
-        if is_yamnet_crying:
-            final_reading_class = "BABY_CRYING_DETECTED"
-            final_reading_conf = confidence if confidence is not None else 0.92
-            event_class = "POSSIBLE_CRYING"
-            ev = MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, final_reading_conf)
-        elif is_yamnet_uncertain:
-            final_reading_class = "UNCERTAIN"
-            final_reading_conf = confidence if confidence is not None else 0.70
-        else:
-            # Sound intensity is decoupled from baby sound classification:
-            # Loud noise (e.g. door slam >= 65 dB) is HIGH SOUND, but NOT BABY CRYING
+        if is_mic_fault:
+            # Mic unplugged or dead: strictly AUDIO UNAVAILABLE
+            final_reading_class = "AUDIO_UNAVAILABLE"
+            final_reading_conf = None
+            std_label = "AUDIO UNAVAILABLE"
+            std_code = "AUDIO_UNAVAILABLE"
+            model_status = "MIC_FAULT"
+            engine_name = "Microphone Fault Detector"
+            intensity = "OFFLINE"
+            reason = "Microphone not producing signal (disconnected/dead)"
+        elif is_below_energy:
+            # Silent or below noise-floor: strictly NOT BABY CRYING
             final_reading_class = "NOT_BABY_CRYING"
-            final_reading_conf = confidence if confidence is not None else 0.88
-            if is_high_sound:
-                event_class = "HIGH_SOUND_ACTIVITY"
-                ev = MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, event_class, final_reading_conf)
+            final_reading_conf = None
+            std_label = "NOT BABY CRYING"
+            std_code = "NOT_BABY_CRYING"
+            engine_name = "Zero-Energy Silence Gate"
+            intensity = "LOW SOUND"
+        elif classification == "BABY_CRYING_DETECTED":
+            # Confirmed by YAMNet neural network inference
+            final_reading_class = "BABY_CRYING_DETECTED"
+            final_reading_conf = confidence
+            std_label = "BABY CRYING DETECTED"
+            std_code = "BABY_CRYING_DETECTED"
+            engine_name = "Google YAMNet ONNX"
+            intensity = "HIGH SOUND" if reading_in.sound_level >= 65.0 else "MODERATE SOUND"
+            ev = MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, "POSSIBLE_CRYING", final_reading_conf or 0.90)
+        elif classification == "UNCERTAIN":
+            final_reading_class = "UNCERTAIN"
+            final_reading_conf = confidence
+            std_label = "UNCERTAIN"
+            std_code = "UNCERTAIN"
+            engine_name = "Google YAMNet ONNX"
+            intensity = "HIGH SOUND" if reading_in.sound_level >= 65.0 else "MODERATE SOUND"
+        elif reading_in.classification == "POSSIBLE_CRYING" and (reading_in.pitch_hz and 380.0 <= reading_in.pitch_hz <= 680.0) and reading_in.sound_level >= 52.0:
+            # Edge pitch detected candidate cry frequency, awaiting YAMNet confirmation
+            final_reading_class = "UNCERTAIN"
+            final_reading_conf = reading_in.confidence
+            std_label = "UNCERTAIN"
+            std_code = "UNCERTAIN"
+            engine_name = "Acoustic Pitch Autocorrelation"
+            intensity = "HIGH SOUND" if reading_in.sound_level >= 65.0 else "MODERATE SOUND"
+            ev = MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, "POSSIBLE_CRYING", final_reading_conf or 0.85)
+        else:
+            # High sound or calm room without infant crying
+            final_reading_class = "NOT_BABY_CRYING"
+            final_reading_conf = confidence
+            std_label = "NOT BABY CRYING"
+            std_code = "NOT_BABY_CRYING"
+            intensity = "HIGH SOUND" if reading_in.sound_level >= 65.0 else ("MODERATE SOUND" if reading_in.sound_level >= 45.0 else "LOW SOUND")
+            if reading_in.sound_level >= settings.SOUND_HIGH_THRESHOLD:
+                ev = MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, "HIGH_SOUND_ACTIVITY", 0.85)
 
         # Create reading with persistent classification
         reading = SensorReading(
@@ -209,6 +282,7 @@ class MonitorService:
             peak_amplitude=reading_in.peak_amplitude,
             classification=final_reading_class,
             confidence=final_reading_conf,
+            source=source or getattr(reading_in, "source", None) or "esp32_device",
             recorded_at=recorded_at,
             received_at=now
         )
@@ -217,30 +291,25 @@ class MonitorService:
         db.refresh(reading)
 
         # Synchronize single authoritative classification state
-        is_cry = (final_reading_class in ["BABY_CRYING_DETECTED", "POSSIBLE_CRYING"])
-        is_unc = (final_reading_class == "UNCERTAIN")
-        std_code = "BABY_CRYING_DETECTED" if is_cry else ("UNCERTAIN" if is_unc else "NOT_BABY_CRYING")
-        std_label = "BABY CRYING DETECTED" if is_cry else ("UNCERTAIN" if is_unc else "NOT BABY CRYING")
-        sound_level = reading.sound_level
-        intensity = "HIGH SOUND" if sound_level >= 65.0 else ("MODERATE SOUND" if sound_level >= 45.0 else "LOW SOUND")
-
+        is_cry = (final_reading_class == "BABY_CRYING_DETECTED")
         auth_state = {
             "classification": std_label,
             "code": std_code,
-            "confidence": round(float(final_reading_conf or 0.85), 2),
+            "confidence": round(float(final_reading_conf), 2) if final_reading_conf is not None else None,
             "timestamp": recorded_at.isoformat(),
             "reading_id": reading.id,
             "event_id": ev.id if ev else None,
             "is_baby_crying": is_cry,
             "is_fresh": True,
-            "model_status": "ONLINE",
-            "processing_status": "COMPLETED",
-            "engine": "Google YAMNet ONNX" if classification == "BABY_CRYING_DETECTED" else "Acoustic Telemetry Stream",
-            "source": "live_ingestion",
+            "model_status": model_status,
+            "processing_status": "COMPLETED" if model_status != "MIC_FAULT" else "MIC_FAULT",
+            "engine": engine_name,
+            "source": source or "live_ingestion",
             "sound_intensity": intensity,
-            "sound_level_db": sound_level,
+            "sound_level_db": reading.sound_level,
             "seconds_since_update": 0.0,
-            "top_classes": []
+            "top_classes": [],
+            "reason": reason
         }
         MonitorService.set_authoritative_state(auth_state)
 

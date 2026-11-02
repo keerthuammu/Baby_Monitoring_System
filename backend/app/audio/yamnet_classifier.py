@@ -133,9 +133,29 @@ class YamnetClassifier:
 
         # Standard physical sound metrics (dB SPL & RMS)
         rms = float(np.sqrt(np.mean(signal ** 2)))
+        signal_std = float(np.std(signal))
         sound_level_db = round(float(20.0 * np.log10(rms * 32768.0)) if rms > 1e-5 else 0.0, 1)
         peak_amp = int(max_val * 32768) if max_val <= 1.0 else int(max_val)
         crest_factor_db = float(20.0 * np.log10(max_val / rms)) if rms > 1e-6 else 0.0
+
+        # Minimum-energy & zero/constant waveform gate:
+        # If signal is silent, zero-energy, or constant DC offset, immediately return NOT_BABY_CRYING.
+        # Never execute neural inference on zero-energy or flatlined microphone signal.
+        if rms < 1e-4 or signal_std < 1e-4 or max_val < 1e-4 or sound_level_db <= 0.0:
+            return {
+                'classification': 'NOT_BABY_CRYING',
+                'display_label': 'NOT BABY CRYING',
+                'code': 'NOT_BABY_CRYING',
+                'confidence': 0.0,
+                'is_baby_crying': False,
+                'sound_level_db': 0.0,
+                'rms_amplitude': 0.0,
+                'peak_amplitude': 0,
+                'top_sound': 'Silence',
+                'top_classes': [{'class_name': 'Silence', 'score': 1.0}],
+                'decision_rule': 'zero_energy_silence_gate',
+                'status': 'SILENCE'
+            }
 
         # 1. Adaptive Noise Floor Tracking (Exponential Moving Average)
         # Tracks true ambient baseline when audio is in calm/moderate room range (20 to 60 dB)

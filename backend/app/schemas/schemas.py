@@ -18,7 +18,7 @@ class DeviceResponse(DeviceBase):
 
 # --- Reading Schemas ---
 class ReadingCreate(BaseModel):
-    device_id: str = Field(..., max_length=64, description="Unique device ID")
+    device_id: str = Field(..., min_length=3, max_length=64, description="Unique device ID")
     sound_level: float = Field(..., ge=0.0, le=140.0, description="Calculated sound level in dB")
     rms_amplitude: float = Field(..., ge=0.0, description="Root-mean-square amplitude")
     peak_amplitude: int = Field(..., ge=0, description="Maximum sample value")
@@ -26,6 +26,7 @@ class ReadingCreate(BaseModel):
     classification: Optional[str] = Field(None, description="Edge/device classification e.g. POSSIBLE_CRYING, HIGH_SOUND_ACTIVITY")
     pitch_hz: Optional[float] = Field(None, description="Estimated fundamental pitch in Hz")
     confidence: Optional[float] = Field(None, ge=0.0, le=1.0, description="Confidence score 0.0 to 1.0")
+    source: Optional[str] = Field("esp32_device", max_length=32, description="Origin: esp32_device, live_mic, demo")
 
 class ReadingResponse(BaseModel):
     id: int
@@ -35,6 +36,7 @@ class ReadingResponse(BaseModel):
     peak_amplitude: int
     classification: Optional[str] = None
     confidence: Optional[float] = None
+    source: Optional[str] = "esp32_device"
     recorded_at: datetime
     received_at: datetime
 
@@ -74,7 +76,7 @@ class StatsResponse(BaseModel):
 class AuthoritativeClassificationResponse(BaseModel):
     classification: str       # "BABY CRYING DETECTED", "NOT BABY CRYING", "UNCERTAIN", "AUDIO UNAVAILABLE"
     code: str                 # "BABY_CRYING_DETECTED", "NOT_BABY_CRYING", "UNCERTAIN", "AUDIO_UNAVAILABLE"
-    confidence: float         # 0.0 to 1.0
+    confidence: Optional[float] = None # 0.0 to 1.0 (None when unavailable/unscored)
     timestamp: datetime
     reading_id: Optional[int] = None
     event_id: Optional[int] = None
@@ -87,6 +89,7 @@ class AuthoritativeClassificationResponse(BaseModel):
     sound_intensity: str = "LOW SOUND"     # "HIGH SOUND", "MODERATE SOUND", "LOW SOUND"
     sound_level_db: float = 0.0
     top_classes: List[dict] = []
+    reason: Optional[str] = None
 
 # --- Health Schema ---
 class HealthResponse(BaseModel):

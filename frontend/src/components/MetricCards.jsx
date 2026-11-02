@@ -42,19 +42,24 @@ export default function MetricCards({
     ? new Date(audioStatus.timestamp).toLocaleTimeString() 
     : (audioStatus?.last_update ? new Date(audioStatus.last_update).toLocaleTimeString() : null);
 
+  const isMicFault = audioStatus?.model_status === "MIC_FAULT" || 
+                     (latestReading && latestReading.rms_amplitude === 0 && latestReading.peak_amplitude === 0 && isOnline);
+
   let classificationBadge = {
     label: "AUDIO UNAVAILABLE",
     code: "AUDIO_UNAVAILABLE",
     color: "bg-slate-800/80 text-slate-400 border-slate-700/50",
     dotColor: "bg-slate-500",
     confidence: null,
-    desc: isOnline ? "Microphone stream paused or awaiting audio..." : "ESP32 IoT hardware node offline",
+    desc: isMicFault 
+      ? (audioStatus?.reason || "Microphone not producing signal (disconnected/dead)")
+      : (isOnline ? "Awaiting audio stream from INMP441 microphone..." : "ESP32 IoT hardware node offline"),
     isLive: false,
-    engine: audioStatus?.engine || "Offline / Awaiting Stream",
+    engine: isMicFault ? "Microphone Fault Detector" : (audioStatus?.engine || "Offline / Awaiting Stream"),
     lastUpdated: updatedTime
   };
 
-  if (!isOnline || !isAudioActive || statusCode === "AUDIO_UNAVAILABLE") {
+  if (!isOnline || !isAudioActive || statusCode === "AUDIO_UNAVAILABLE" || isMicFault) {
     // State 4: AUDIO UNAVAILABLE
     classificationBadge = {
       label: "AUDIO UNAVAILABLE",
@@ -62,9 +67,11 @@ export default function MetricCards({
       color: "bg-slate-800/80 text-slate-400 border-slate-700/50",
       dotColor: "bg-slate-500",
       confidence: null,
-      desc: isOnline ? "Awaiting audio stream from INMP441 microphone..." : "ESP32 IoT hardware node offline",
+      desc: isMicFault 
+        ? (audioStatus?.reason || "Microphone not producing signal (disconnected/dead)")
+        : (isOnline ? "Awaiting audio stream from INMP441 microphone..." : "ESP32 IoT hardware node offline"),
       isLive: false,
-      engine: audioStatus?.engine || "Offline / Awaiting Stream",
+      engine: isMicFault ? "Microphone Fault Detector" : (audioStatus?.engine || "Offline / Awaiting Stream"),
       lastUpdated: updatedTime
     };
   } else if (statusCode === "BABY_CRYING_DETECTED" || statusClassification === "BABY CRYING DETECTED") {
@@ -74,7 +81,7 @@ export default function MetricCards({
       code: "BABY_CRYING_DETECTED",
       color: "bg-rose-500/20 text-rose-400 border-rose-500/40 animate-pulse",
       dotColor: "bg-rose-500",
-      confidence: confStr || "92%",
+      confidence: confStr,
       desc: "Acoustic signature matches infant distress crying pattern",
       isLive: true,
       engine: audioStatus?.engine || "Google YAMNet ONNX (Active)",
@@ -87,10 +94,10 @@ export default function MetricCards({
       code: "UNCERTAIN",
       color: "bg-amber-500/15 text-amber-400 border-amber-500/30",
       dotColor: "bg-amber-500",
-      confidence: confStr || "70%",
-      desc: "Borderline or ambiguous acoustic profile",
+      confidence: confStr,
+      desc: "Borderline or ambiguous acoustic profile (awaiting neural confirmation)",
       isLive: true,
-      engine: audioStatus?.engine || "Google YAMNet ONNX (Active)",
+      engine: audioStatus?.engine || "Acoustic Pitch Autocorrelation",
       lastUpdated: updatedTime
     };
   } else {
@@ -100,7 +107,7 @@ export default function MetricCards({
       code: "NOT_BABY_CRYING",
       color: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
       dotColor: "bg-emerald-400",
-      confidence: confStr || "95%",
+      confidence: confStr,
       desc: "Normal nursery acoustics, speech or environmental noise",
       isLive: true,
       engine: audioStatus?.engine || "Google YAMNet ONNX (Active)",

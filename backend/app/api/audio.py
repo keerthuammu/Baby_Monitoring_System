@@ -101,7 +101,8 @@ async def classify_audio_sample(
         db, 
         reading_in, 
         classification=classification, 
-        confidence=confidence
+        confidence=confidence,
+        source="esp32_device"
     )
 
     # Mirror inference results to Render Cloud
@@ -185,7 +186,8 @@ async def test_classify_audio(
         db, 
         reading_in, 
         classification=classification, 
-        confidence=confidence
+        confidence=confidence,
+        source="dashboard_test"
     )
 
     return {

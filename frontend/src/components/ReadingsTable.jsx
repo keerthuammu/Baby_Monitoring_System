@@ -46,14 +46,18 @@ export default function ReadingsTable({ readings, events, isOnline }) {
             </thead>
             <tbody className="divide-y divide-slate-800/60 text-slate-300">
               {displayedReadings.map((r) => {
+                const isZeroSignal = (r.rms_amplitude === 0 && r.peak_amplitude === 0);
                 const rClass = (r.classification || '').toUpperCase();
                 const explicitCry = (rClass === 'BABY_CRYING_DETECTED' || rClass === 'POSSIBLE_CRYING' || (rClass.includes('CRYING') && !rClass.includes('NOT')));
-                const isEdgeCry = explicitCry;
+                const isEdgeCry = !isZeroSignal && explicitCry;
 
                 // Feature A: Sound Intensity (Decoupled Volume Level)
                 let intensityLabel = "Low Sound";
                 let intensityStyle = "bg-emerald-500/15 text-emerald-400 border-emerald-500/30";
-                if (r.sound_level >= 65.0) {
+                if (isZeroSignal) {
+                  intensityLabel = "No Signal";
+                  intensityStyle = "bg-slate-800 text-slate-400 border border-slate-700";
+                } else if (r.sound_level >= 65.0) {
                   intensityLabel = "High Sound";
                   intensityStyle = "bg-rose-500/15 text-rose-400 border-rose-500/30";
                 } else if (r.sound_level >= 45.0) {
@@ -64,7 +68,10 @@ export default function ReadingsTable({ readings, events, isOnline }) {
                 // Feature B: Baby Sound Classification (Authoritative Backend State)
                 let babyLabel = "NOT BABY CRYING";
                 let babyStyle = "bg-emerald-500/15 text-emerald-400 border-emerald-500/30";
-                if (isEdgeCry) {
+                if (isZeroSignal || rClass === 'AUDIO_UNAVAILABLE') {
+                  babyLabel = "NO SIGNAL (MIC FAULT)";
+                  babyStyle = "bg-slate-800 text-slate-400 border border-slate-700";
+                } else if (isEdgeCry) {
                   babyLabel = "BABY CRYING DETECTED";
                   babyStyle = "bg-rose-500/20 text-rose-400 border-rose-500/40 font-bold animate-pulse";
                 } else if (rClass.includes("UNCERTAIN")) {

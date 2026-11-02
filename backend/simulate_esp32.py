@@ -17,6 +17,15 @@ DEFAULT_BACKEND = "https://baby-monitor-backend-8m8o.onrender.com/api/readings"
 BACKEND_URL = sys.argv[1] if (len(sys.argv) > 1 and sys.argv[1].startswith("http")) else os.getenv("BACKEND_URL", DEFAULT_BACKEND)
 API_KEY = os.getenv("API_KEY", "baby_monitor_device_secret_key_123")
 DEVICE_ID = "esp32-devkit-v1-simulated"
+DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() in ("true", "1", "yes")
+
+if not DEMO_MODE:
+    print("=" * 60)
+    print("[SIMULATION BLOCKED] DEMO_MODE is not enabled.")
+    print("To protect production telemetry, simulation requires explicit DEMO_MODE=true.")
+    print("Set DEMO_MODE=true in your environment or CLI to enable.")
+    print("=" * 60)
+    sys.exit(1)
 
 HEADERS = {
     "Content-Type": "application/json",
@@ -44,7 +53,8 @@ def generate_reading(mode: str = "normal") -> dict:
             "peak_amplitude": peak,
             "classification": "POSSIBLE_CRYING",
             "pitch_hz": pitch,
-            "confidence": 0.92
+            "confidence": 0.92,
+            "source": "demo"
         }
     elif mode == "loud":
         sound_level = round(random.uniform(68.0, 84.0), 2)
@@ -57,7 +67,8 @@ def generate_reading(mode: str = "normal") -> dict:
             "peak_amplitude": peak,
             "classification": "HIGH_SOUND_ACTIVITY",
             "pitch_hz": round(random.uniform(100.0, 180.0), 1),
-            "confidence": 0.85
+            "confidence": 0.85,
+            "source": "demo"
         }
     elif mode == "quiet":
         sound_level = round(random.uniform(32.0, 44.0), 2)
@@ -70,7 +81,8 @@ def generate_reading(mode: str = "normal") -> dict:
             "peak_amplitude": peak,
             "classification": "QUIET",
             "pitch_hz": 0.0,
-            "confidence": 0.95
+            "confidence": 0.95,
+            "source": "demo"
         }
     else:
         sound_level = round(random.uniform(46.0, 58.0), 2)
@@ -83,7 +95,8 @@ def generate_reading(mode: str = "normal") -> dict:
             "peak_amplitude": peak,
             "classification": "MODERATE_SOUND",
             "pitch_hz": 0.0,
-            "confidence": 0.75
+            "confidence": 0.75,
+            "source": "demo"
         }
 
 def run_simulation(interval: float = 2.0, count: int = 50):

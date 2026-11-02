@@ -32,6 +32,7 @@ class SensorReading(Base):
     peak_amplitude = Column(Integer, nullable=False)      # Peak sample value
     classification = Column(String(50), nullable=True)    # Edge/YAMNet classification: BABY_CRYING_DETECTED, POSSIBLE_CRYING, etc.
     confidence = Column(Float, nullable=True)            # Confidence score 0.0 to 1.0
+    source = Column(String(32), default="esp32_device", nullable=True) # esp32_device, live_mic, demo
     recorded_at = Column(DateTime(timezone=True), default=utc_now, index=True)
     received_at = Column(DateTime(timezone=True), default=utc_now)
 
