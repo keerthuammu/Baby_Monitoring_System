@@ -412,9 +412,12 @@ void loop() {
     int samples_read = bytes_read / sizeof(int32_t);
 
     for (int i = 0; i < samples_read; i++) {
-      // INMP441 provides 24-bit audio MSB-aligned in 32-bit slot (bits 31..8)
-      // Standard 16-bit extraction without digital distortion: Shift >> 16
-      int32_t sample_raw = raw_samples[i] >> 16;
+      // INMP441 provides 24-bit audio MSB-aligned in 32-bit slot (bits 31..8).
+      // Shifting >> 13 provides an 8x acoustic scaling factor so that:
+      // - Normal conversational speech reaches ~1,000 - 3,000 counts (RMS ~500 - 1500, dB ~55 - 65 dB)
+      // - A close hand clap reaches near full scale (~25,000 - 30,000 counts, dB >= 75 dB)
+      // - constrain() safely protects against integer wrap-around on extreme transient bursts
+      int32_t sample_raw = raw_samples[i] >> 13;
 
       // 1st-order IIR DC-removal high-pass filter (cutoff ~20 Hz at 16kHz)
       // y[n] = x[n] - x[n-1] + 0.995 * y[n-1]
@@ -531,9 +534,9 @@ void loop() {
   // Staggered by at least 2000 ms after telemetry to avoid dual-burst HTTPS rate limits
   if (now - lastAudioTransmitTime >= AUDIO_CHUNK_INTERVAL_MS && (now - lastTransmitTime >= 2000)) {
     lastAudioTransmitTime = now;
-    // Stream 32KB audio ONLY if infant cry pitch was verified or sound is very loud (>= 68 dB)
-    // Never stream audio on routine 50 dB conversation, which triggers Cloudflare 429 rate limits
-    if (now - lastCryDetectedTime < 5000 || currentSoundLevelDb >= 68.0f) {
+    // Stream 32KB audio ONLY if infant cry pitch was verified or sound is elevated (>= 65 dB)
+    // Never stream audio on routine ambient conversation (< 65 dB), which triggers Cloudflare 429 rate limits
+    if (now - lastCryDetectedTime < 5000 || currentSoundLevelDb >= 65.0f) {
       sendAudioChunkToBackend();
     } else {
       audioBufferIdx = 0; // Clear ambient audio buffer to prevent backlog

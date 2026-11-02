@@ -22,17 +22,17 @@ class Settings(BaseSettings):
     AUDIO_RETENTION_DAYS: int = 7
     
     # Acoustic & Temporal Decision Thresholds (Precision-Calibrated)
-    CRY_SCORE_CONFIRMED_THRESHOLD: float = 0.35  # YAMNet cry score for confirmed cry
-    CRY_SCORE_UNCERTAIN_THRESHOLD: float = 0.18  # Lower bound for UNCERTAIN state
-    CRY_SCORE_MARGIN: float = 0.05               # Cry score must exceed dominant negative class by this margin
-    CRY_TOP_N_REQUIRED: int = 4                  # Crying class must be in top-N predictions
+    CRY_SCORE_CONFIRMED_THRESHOLD: float = 0.25  # YAMNet cry score for confirmed cry
+    CRY_SCORE_UNCERTAIN_THRESHOLD: float = 0.12  # Lower bound for UNCERTAIN state
+    CRY_SCORE_MARGIN: float = 0.02               # Cry score must exceed dominant negative class by this margin
+    CRY_TOP_N_REQUIRED: int = 3                  # Crying class must be in top-N predictions
     
     # Adaptive Noise Floor & Gate
-    ADAPTIVE_NOISE_FLOOR_MARGIN_DB: float = 8.0  # Must be at least 8 dB above rolling noise floor
+    ADAPTIVE_NOISE_FLOOR_MARGIN_DB: float = 6.0  # Must be at least 8 dB above rolling noise floor
     NOISE_FLOOR_ALPHA: float = 0.05              # Exponential moving average smoothing factor
     
     # Transient / Impulse Veto (Claps, Door Slams, Knocks)
-    CREST_FACTOR_IMPULSE_THRESHOLD: float = 14.5 # dB: Peak-to-RMS ratio above 14.5 dB flags transient impulse
+    CREST_FACTOR_IMPULSE_THRESHOLD: float = 15.0 # dB: Peak-to-RMS ratio above 14.5 dB flags transient impulse
     
     # Temporal Multi-Window Voting & Hysteresis
     CRY_WINDOW_VOTES_REQUIRED: int = 2           # Require at least 2 cry windows

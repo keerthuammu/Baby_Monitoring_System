@@ -139,14 +139,16 @@ class YamnetClassifier:
         crest_factor_db = float(20.0 * np.log10(max_val / rms)) if rms > 1e-6 else 0.0
 
         # Minimum-energy & zero/constant waveform gate:
-        # If signal is silent, zero-energy, or constant DC offset, immediately return NOT_BABY_CRYING.
-        # Never execute neural inference on zero-energy or flatlined microphone signal.
-        if rms < 1e-4 or signal_std < 1e-4 or max_val < 1e-4 or sound_level_db <= 0.0:
+        # If signal is silent, zero-energy, or constant DC offset (< 20 dB noise floor),
+        # immediately return NOT_BABY_CRYING.
+        if rms < 1e-4 or signal_std < 1e-4 or max_val < 1e-4 or sound_level_db < 20.0:
             return {
                 'classification': 'NOT_BABY_CRYING',
                 'display_label': 'NOT BABY CRYING',
                 'code': 'NOT_BABY_CRYING',
                 'confidence': 0.0,
+                'crying_score': 0.0,
+                'dominant_negative_score': 0.0,
                 'is_baby_crying': False,
                 'sound_level_db': 0.0,
                 'rms_amplitude': 0.0,
@@ -157,28 +159,37 @@ class YamnetClassifier:
                 'status': 'SILENCE'
             }
 
-        # 1. Adaptive Noise Floor Tracking (Exponential Moving Average)
+        # 1. Window Peak Normalization for YAMNet Neural Inference
+        # Brings quiet or distant nursery audio into YAMNet's optimal training distribution (peak ~0.75)
+        # Clamped to max_gain = 15.0x so ambient noise floor is never over-amplified
+        if max_val > 1e-4:
+            gain = min(0.75 / max_val, 15.0)
+            inference_signal = np.clip(signal * gain, -1.0, 1.0)
+        else:
+            inference_signal = signal.copy()
+
+        # 2. Adaptive Noise Floor Tracking (Exponential Moving Average)
         # Tracks true ambient baseline when audio is in calm/moderate room range (20 to 60 dB)
         if 20.0 <= sound_level_db <= 60.0:
             alpha = getattr(settings, "NOISE_FLOOR_ALPHA", 0.05)
             self.rolling_noise_floor_db = (1.0 - alpha) * self.rolling_noise_floor_db + alpha * sound_level_db
 
         margin_above_floor = sound_level_db - self.rolling_noise_floor_db
-        min_gate_margin = getattr(settings, "ADAPTIVE_NOISE_FLOOR_MARGIN_DB", 8.0)
-        is_above_noise_floor = (margin_above_floor >= min_gate_margin) or (sound_level_db >= 52.0)
+        min_gate_margin = getattr(settings, "ADAPTIVE_NOISE_FLOOR_MARGIN_DB", 6.0)
+        is_above_noise_floor = (margin_above_floor >= min_gate_margin) or (sound_level_db >= 48.0)
 
         # 3. YAMNet Neural Inference (0.975s window)
-        inference_signal = signal.copy()
         outputs = self.session.run(None, {self.input_name: inference_signal})
         scores = outputs[0]      # Shape: [num_frames, 521]
         embeddings = outputs[1]  # Shape: [num_frames, 1024]
         mean_scores = np.mean(scores, axis=0)
 
         # 4. Target Crying vs Competing Classes
-        # AudioSet Class 20: 'Baby cry, infant cry', Class 19: 'Crying, sobbing'
+        # AudioSet Class 20: 'Baby cry, infant cry', Class 19: 'Crying, sobbing', Class 21: 'Whimper'
         infant_cry_score = float(mean_scores[20])
         crying_sobbing_score = float(mean_scores[19])
-        cry_score = max(infant_cry_score, crying_sobbing_score)
+        whimper_score = float(mean_scores[21])
+        cry_score = max(infant_cry_score, crying_sobbing_score, whimper_score * 0.90)
 
         competing_indices = [
             0, 1, 2, 4, 5, 6, 7,     # Speech, Child speech, Conversation, Male, Female, Shout, Yell
@@ -207,8 +218,8 @@ class YamnetClassifier:
         top_sound_score = top_classes[0]["score"] if top_classes else 0.0
 
         top_n_req = getattr(settings, "CRY_TOP_N_REQUIRED", 3)
-        is_cry_in_top_n = any(idx in [20, 19] for idx in top_indices[:top_n_req])
-        is_cry_top1 = (top_indices[0] in [20, 19])
+        is_cry_in_top_n = any(idx in [20, 19, 21] for idx in top_indices[:top_n_req])
+        is_cry_top1 = (top_indices[0] in [20, 19, 21])
 
         # 5. Precision-First Calibrated Rule Evaluation (Per-Window)
         conf_thresh = getattr(settings, "CRY_SCORE_CONFIRMED_THRESHOLD", 0.35)
@@ -216,7 +227,7 @@ class YamnetClassifier:
         margin = getattr(settings, "CRY_SCORE_MARGIN", 0.05)
 
         rule_fired = "ambient_or_negative"
-        if not is_above_noise_floor:
+        if not is_above_noise_floor and cry_score < conf_thresh:
             raw_code = "NOT_BABY_CRYING"
             raw_confidence = 0.95
             rule_fired = "noise_floor_gate"
@@ -276,7 +287,7 @@ class YamnetClassifier:
             self.window_history.pop(0)
 
         cry_votes = sum(1 for w in self.window_history if w["code"] == "BABY_CRYING_DETECTED")
-        immediate_cry = (raw_code == "BABY_CRYING_DETECTED") and is_cry_top1 and (cry_score >= 0.55)
+        immediate_cry = (raw_code == "BABY_CRYING_DETECTED") and (is_cry_top1 or is_cry_in_top_n) and (cry_score >= 0.28)
 
         if self.active_crying_incident:
             if raw_code == "BABY_CRYING_DETECTED":
@@ -287,7 +298,7 @@ class YamnetClassifier:
             else:
                 time_since_cry = (now - self.last_confirmed_cry_time).total_seconds() if self.last_confirmed_cry_time else 999.0
                 # Breath pause bridge: only extend within 4.0s IF YAMNet still shows residual cry evidence, NEVER on loudness alone!
-                if time_since_cry <= pause_bridge_limit and (raw_code == "UNCERTAIN" or cry_score >= 0.15) and (dominant_negative < 0.40):
+                if time_since_cry <= pause_bridge_limit and (raw_code == "UNCERTAIN" or cry_score >= 0.12) and (dominant_negative < 0.40):
                     final_code = "BABY_CRYING_DETECTED"
                     final_confidence = round(max(0.70, (self.last_confidence or 0.85) * 0.92), 2)
                     decision_rule = f"breath_pause_bridge_{time_since_cry:.1f}s"
@@ -297,17 +308,23 @@ class YamnetClassifier:
                     final_confidence = raw_confidence
                     decision_rule = "incident_released"
         else:
-            if cry_votes >= req_votes or (immediate_cry and cry_votes >= 2):
+            if immediate_cry:
+                self.active_crying_incident = True
+                self.last_confirmed_cry_time = now
+                final_code = "BABY_CRYING_DETECTED"
+                final_confidence = raw_confidence
+                decision_rule = "immediate_cry_confirmed"
+            elif cry_votes >= req_votes:
                 self.active_crying_incident = True
                 self.last_confirmed_cry_time = now
                 final_code = "BABY_CRYING_DETECTED"
                 final_confidence = raw_confidence
                 decision_rule = "multi_window_confirmed"
             elif raw_code == "BABY_CRYING_DETECTED":
-                # Isolated single spike without multi-window confirmation -> UNCERTAIN (never triggers alert banner!)
+                # Single weak cry score (< 0.28) -> UNCERTAIN until confirmed by additional window
                 final_code = "UNCERTAIN"
                 final_confidence = raw_confidence
-                decision_rule = "single_spike_dampened_to_uncertain"
+                decision_rule = "single_weak_spike_dampened_to_uncertain"
             else:
                 final_code = raw_code
                 final_confidence = raw_confidence
@@ -388,15 +405,18 @@ class YamnetClassifier:
                         ).astype(np.float32)
                         sample_rate = 16000
 
-                    if len(signal) >= 24000:
-                        chunk_size = 16000
+                    if len(signal) >= 15600:
+                        chunk_size = 15600
                         last_res = None
                         best_cry_res = None
-                        for start_idx in range(0, len(signal) - 8000, chunk_size):
+                        for start_idx in range(0, max(1, len(signal) - 8000), 8000):
                             chunk = signal[start_idx : start_idx + chunk_size]
+                            if len(chunk) < chunk_size:
+                                chunk = np.pad(chunk, (0, chunk_size - len(chunk)))
                             last_res = self.classify_waveform(chunk, sample_rate=16000)
                             if last_res.get("classification") == "BABY_CRYING_DETECTED":
                                 best_cry_res = last_res
+                                break
                         return best_cry_res or last_res or self.classify_waveform(signal, sample_rate=16000)
 
                     return self.classify_waveform(signal, sample_rate=sample_rate)
@@ -406,6 +426,19 @@ class YamnetClassifier:
         # Raw 16-bit PCM fallback (standard ESP32 stream format)
         try:
             signal = np.frombuffer(wav_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+            if len(signal) >= 15600:
+                chunk_size = 15600
+                last_res = None
+                best_cry_res = None
+                for start_idx in range(0, max(1, len(signal) - 8000), 8000):
+                    chunk = signal[start_idx : start_idx + chunk_size]
+                    if len(chunk) < chunk_size:
+                        chunk = np.pad(chunk, (0, chunk_size - len(chunk)))
+                    last_res = self.classify_waveform(chunk, sample_rate=16000)
+                    if last_res.get("classification") == "BABY_CRYING_DETECTED":
+                        best_cry_res = last_res
+                        break
+                return best_cry_res or last_res or self.classify_waveform(signal, sample_rate=16000)
             return self.classify_waveform(signal, sample_rate=16000)
         except Exception as e:
             return self._format_unavailable(f"Invalid audio format: {str(e)}")
