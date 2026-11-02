@@ -42,3 +42,4 @@ for nf in neg_files:
     print(f"[{'PASS' if is_not_cry else 'FAIL'}] {fname:<22} -> {res['display_label']:<22} (Score: {res['crying_score']:.3f}, Rule: {res['decision_rule']})")
 
 print(f"\nNegative Specificity: {neg_passed} / {len(neg_files)} ({neg_passed/len(neg_files)*100:.1f}%)")
+

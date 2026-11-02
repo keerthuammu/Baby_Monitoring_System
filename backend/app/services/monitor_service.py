@@ -221,6 +221,32 @@ class MonitorService:
         reason = None
         ev = None
 
+        # Check if an active crying incident was recently confirmed by YAMNet (within last 8 seconds)
+        active_cry = False
+        cry_conf = None
+        try:
+            from app.audio.yamnet_classifier import YamnetClassifier
+            classifier = YamnetClassifier.get_instance()
+            if classifier.active_crying_incident and classifier.last_confirmed_cry_time:
+                time_since_cry = (now - to_utc(classifier.last_confirmed_cry_time)).total_seconds()
+                if time_since_cry <= 8.0:
+                    active_cry = True
+                    cry_conf = classifier.last_confidence
+        except Exception:
+            pass
+
+        if not active_cry and cls._latest_authoritative_state and cls._latest_authoritative_state.get("is_baby_crying"):
+            last_ts = cls._latest_authoritative_state.get("timestamp")
+            if last_ts:
+                try:
+                    if isinstance(last_ts, str):
+                        last_ts = datetime.fromisoformat(last_ts)
+                    if (now - to_utc(last_ts)).total_seconds() <= 7.0:
+                        active_cry = True
+                        cry_conf = cls._latest_authoritative_state.get("confidence")
+                except Exception:
+                    pass
+
         if is_mic_fault:
             # Mic unplugged or dead: strictly AUDIO UNAVAILABLE
             final_reading_class = "AUDIO_UNAVAILABLE"
@@ -239,26 +265,35 @@ class MonitorService:
             std_code = "NOT_BABY_CRYING"
             engine_name = "Zero-Energy Silence Gate"
             intensity = "LOW SOUND"
-        elif classification == "BABY_CRYING_DETECTED":
+        elif classification == "BABY_CRYING_DETECTED" or reading_in.classification == "BABY_CRYING_DETECTED":
             # Confirmed by YAMNet neural network inference
             final_reading_class = "BABY_CRYING_DETECTED"
-            final_reading_conf = confidence
+            final_reading_conf = confidence or reading_in.confidence or 0.92
             std_label = "BABY CRYING DETECTED"
             std_code = "BABY_CRYING_DETECTED"
             engine_name = "Google YAMNet ONNX"
             intensity = "HIGH SOUND" if reading_in.sound_level >= 65.0 else "MODERATE SOUND"
             ev = MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, "POSSIBLE_CRYING", final_reading_conf or 0.90)
-        elif classification == "UNCERTAIN":
+        elif active_cry and reading_in.sound_level >= 45.0:
+            # Maintain ongoing crying incident during infant breath pauses or continuous distress
+            final_reading_class = "BABY_CRYING_DETECTED"
+            final_reading_conf = cry_conf or 0.88
+            std_label = "BABY CRYING DETECTED"
+            std_code = "BABY_CRYING_DETECTED"
+            engine_name = "Google YAMNet ONNX (Active Incident)"
+            intensity = "HIGH SOUND" if reading_in.sound_level >= 65.0 else "MODERATE SOUND"
+            ev = MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, "POSSIBLE_CRYING", final_reading_conf)
+        elif classification == "UNCERTAIN" or reading_in.classification == "UNCERTAIN":
             final_reading_class = "UNCERTAIN"
-            final_reading_conf = confidence
+            final_reading_conf = confidence or reading_in.confidence or 0.70
             std_label = "UNCERTAIN"
             std_code = "UNCERTAIN"
             engine_name = "Google YAMNet ONNX"
             intensity = "HIGH SOUND" if reading_in.sound_level >= 65.0 else "MODERATE SOUND"
-        elif reading_in.classification == "POSSIBLE_CRYING" and (reading_in.pitch_hz and 380.0 <= reading_in.pitch_hz <= 680.0) and reading_in.sound_level >= 52.0:
+        elif reading_in.classification == "POSSIBLE_CRYING" or (reading_in.pitch_hz and 320.0 <= reading_in.pitch_hz <= 720.0 and reading_in.sound_level >= 50.0):
             # Edge pitch detected candidate cry frequency, awaiting YAMNet confirmation
             final_reading_class = "UNCERTAIN"
-            final_reading_conf = reading_in.confidence
+            final_reading_conf = reading_in.confidence or 0.85
             std_label = "UNCERTAIN"
             std_code = "UNCERTAIN"
             engine_name = "Acoustic Pitch Autocorrelation"
@@ -267,7 +302,7 @@ class MonitorService:
         else:
             # High sound or calm room without infant crying
             final_reading_class = "NOT_BABY_CRYING"
-            final_reading_conf = confidence
+            final_reading_conf = confidence or reading_in.confidence or 0.88
             std_label = "NOT BABY CRYING"
             std_code = "NOT_BABY_CRYING"
             intensity = "HIGH SOUND" if reading_in.sound_level >= 65.0 else ("MODERATE SOUND" if reading_in.sound_level >= 45.0 else "LOW SOUND")

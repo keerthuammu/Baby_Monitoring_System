@@ -78,3 +78,4 @@ if __name__ == "__main__":
     # Simulate live unboosted chunk (RMS ~150, peak ~1200 as observed in live packets)
     live_unboosted = dataset_sig * (150.0 / (np.sqrt(np.mean(dataset_sig[:15600]**2)) * 32768.0))
     analyze_audio("Live Unboosted Cry Chunk (INMP441 level: RMS ~150, Peak ~1200)", live_unboosted)
+
