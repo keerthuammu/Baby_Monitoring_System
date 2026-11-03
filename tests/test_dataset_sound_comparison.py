@@ -71,3 +71,4 @@ def test_api_returns_dataset_comparison(client):
     sdata = status_res.json()
     assert "dataset_similarity" in sdata
     assert sdata["dataset_similarity"] >= 0.70
+

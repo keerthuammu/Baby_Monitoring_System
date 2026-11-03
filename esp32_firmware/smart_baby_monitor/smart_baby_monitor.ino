@@ -5,7 +5,7 @@
  * Description:
  *   Continuous acoustic feature extraction (RMS, Peak, Sound Level dB) via
  *   INMP441 I2S MEMS microphone, with real-time neural YAMNet baby crying
- *   classification on FastAPI Render backend.
+ *   classification on FastAPI cloud backend.
  *
  * Hardware:
  *   - ESP32 DevKit V1
@@ -79,7 +79,7 @@ unsigned long lastTransmitTime = 0;
 unsigned long lastAudioTransmitTime = 0;
 unsigned long lastWifiRetryTime = 0;
 unsigned long rateLimitCooldownUntil = 0;
-unsigned long lastCryDetectedTime = 0;  // Infant crying episode hold timer
+unsigned long lastCryDetectedTime = 0;  // Holds cry state for 5 seconds AFTER YAMNet confirms crying
 bool wifiConnected = false;
 
 // Audio window accumulation for sound intensity (dB & RMS)
@@ -148,13 +148,15 @@ void checkWifiConnection() {
   unsigned long now = millis();
   if (now - lastWifiRetryTime > 15000) {
     lastWifiRetryTime = now;
-    Serial.printf("[WIFI] Connecting to SSID: '%s'...\n", WIFI_SSID);
+    Serial.printf("[WIFI] Reconnecting to '%s'...\n", WIFI_SSID);
+    WiFi.disconnect();
+    delay(100);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   }
 }
 
-// Focused Infant Distress Pitch Analyzer (320 Hz - 720 Hz)
-// Searches infant cry fundamental frequencies using autocorrelation over recent 1024 samples
+// Focused Infant Cry Pitch Candidate Analyzer (350 Hz - 680 Hz)
+// Uses true normalized cross-correlation with internal peak picking to eliminate boundary lock
 float detectInfantCryPitch(float sampleRate, float* outPeriodicity) {
   if (audioTotalBuffered < 1024) {
     if (outPeriodicity) *outPeriodicity = 0.0f;
@@ -177,30 +179,41 @@ float detectInfantCryPitch(float sampleRate, float* outPeriodicity) {
     energy0 += (int32_t)slice[i] * (int32_t)slice[i];
   }
 
-  if (energy0 < 10000) {
+  // Minimum energy threshold: rejects calm ambient and silence
+  if (energy0 < 25000) {
     if (outPeriodicity) *outPeriodicity = 0.0f;
     return 0.0f;
   }
 
-  int64_t maxCorr = 0;
-  int bestLag = 0;
-
+  // Compute true normalized cross-correlation: corr / sqrt(energy0 * energyLag)
+  float normCorr[52];
   for (int lag = minLag; lag <= maxLag; lag++) {
     int64_t corr = 0;
+    int64_t energyLag = 0;
     for (int i = 0; i < testLen; i++) {
       corr += (int32_t)slice[i] * (int32_t)slice[i + lag];
+      energyLag += (int32_t)slice[i + lag] * (int32_t)slice[i + lag];
     }
-    if (corr > maxCorr) {
-      maxCorr = corr;
-      bestLag = lag;
+    double denom = sqrt((double)energy0 * (double)energyLag);
+    normCorr[lag] = (denom > 1.0) ? (float)(corr / denom) : 0.0f;
+  }
+
+  // Strictly require an INTERNAL local maximum peak (boundary lags 22 and 50 are NEVER accepted)
+  float bestPeakCorr = 0.0f;
+  int bestLag = 0;
+
+  for (int lag = minLag + 1; lag < maxLag; lag++) {
+    if (normCorr[lag] > normCorr[lag - 1] && normCorr[lag] > normCorr[lag + 1]) {
+      if (normCorr[lag] > bestPeakCorr && normCorr[lag] >= 0.55f) {
+        bestPeakCorr = normCorr[lag];
+        bestLag = lag;
+      }
     }
   }
 
-  float periodicity = (float)maxCorr / (float)energy0;
-  if (outPeriodicity) *outPeriodicity = periodicity;
+  if (outPeriodicity) *outPeriodicity = bestPeakCorr;
 
-  // Real infant cries through phone speakers or across room have periodicity ~0.40 - 0.85
-  if (periodicity >= 0.40f && bestLag > 0) {
+  if (bestLag > 0 && bestPeakCorr >= 0.55f) {
     return sampleRate / (float)bestLag;
   }
   return 0.0f;
@@ -238,7 +251,7 @@ void sendTelemetryToBackend(float soundLevel, float rms, int peak, const char* c
   http.addHeader("Content-Type", "application/json");
   http.addHeader("Accept", "application/json");
   http.addHeader("X-API-Key", API_KEY);
-  http.addHeader("User-Agent", "SmartBabyMonitor-ESP32/2.1");
+  http.addHeader("User-Agent", "SmartBabyMonitor-ESP32/2.2");
 
   char jsonBuffer[384];
   snprintf(
@@ -302,7 +315,7 @@ void sendAudioChunkToBackend() {
   http.addHeader("Accept", "application/json");
   http.addHeader("X-API-Key", API_KEY);
   http.addHeader("X-Device-Id", DEVICE_ID);
-  http.addHeader("User-Agent", "SmartBabyMonitor-ESP32/2.1");
+  http.addHeader("User-Agent", "SmartBabyMonitor-ESP32/2.2");
 
   // Unroll circular buffer into linear 16000 samples (32KB)
   int samplesToSend = (audioTotalBuffered >= AUDIO_BUFFER_SAMPLES) ? AUDIO_BUFFER_SAMPLES : audioTotalBuffered;
@@ -316,6 +329,7 @@ void sendAudioChunkToBackend() {
   if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_CREATED) {
     String resp = http.getString();
     Serial.printf("[YAMNet AUDIO] 16kHz chunk sent -> HTTP %d | %s\n", httpCode, resp.substring(0, 100).c_str());
+    // SOLE AUTHORITY: Only when YAMNet neural network confirms crying is lastCryDetectedTime updated!
     if (resp.indexOf("BABY CRYING DETECTED") >= 0 || resp.indexOf("BABY_CRYING_DETECTED") >= 0) {
       lastCryDetectedTime = millis();
       Serial.println(">>> 🚨 YAMNET NEURAL NETWORK CONFIRMED BABY CRYING! 🚨 <<<");
@@ -347,7 +361,7 @@ void setup() {
   setupI2S();
 
   // 2. Begin Wi-Fi Connection
-  Serial.printf("[WIFI] Connecting to '%s'", WIFI_SSID);
+  Serial.printf("[WIFI] Connecting to '%s'...\n", WIFI_SSID);
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -419,14 +433,14 @@ void loop() {
       double soundLevel = 20.0 * log10(rms > 1.0 ? rms : 1.0);
       currentSoundLevelDb = soundLevel;
 
-      // Edge Pitch Analysis (320 Hz - 720 Hz infant distress band)
+      // Edge Pitch Candidate Analysis (350 Hz - 680 Hz infant distress band)
       float periodicity = 0.0f;
       float pitch = 0.0f;
-      if (soundLevel >= 48.0 && audioTotalBuffered >= 1024) {
+      if (soundLevel >= 52.0 && audioTotalBuffered >= 1024) {
         pitch = detectInfantCryPitch(SAMPLE_RATE, &periodicity);
       }
 
-      // Feature A: Sound Intensity (Volume level)
+      // Feature A: Sound Intensity (Volume level only)
       const char* intensity = "LOW SOUND";
       if (soundLevel >= 65.0f) {
         intensity = "HIGH SOUND";
@@ -435,34 +449,26 @@ void loop() {
       }
 
       // Feature B: Baby Sound Status & Edge Acoustic Telemetry
+      // HARD RULE: Only YAMNet neural network on the backend can confirm BABY CRYING DETECTED!
+      // Edge pitch alone can NEVER declare BABY CRYING DETECTED!
       const char* babyStatus = "NOT BABY CRYING";
       const char* classification = "QUIET";
       float confidence = 0.85f;
 
-      bool isCryPitch = (pitch >= 320.0f && pitch <= 720.0f) && (periodicity >= 0.40f);
-      static int consecutiveVoicedFrames = 0;
+      bool isCryPitchCandidate = (pitch >= 350.0f && pitch <= 680.0f) && (periodicity >= 0.55f);
 
-      if (isCryPitch && soundLevel >= 50.0f) {
-        consecutiveVoicedFrames++;
-        if (consecutiveVoicedFrames >= 2) {
-          lastCryDetectedTime = now;
-          Serial.printf("[ACOUSTIC PITCH] Infant crying frequency: %.1f Hz (periodicity: %.2f)\n", pitch, periodicity);
-        }
-      } else {
-        consecutiveVoicedFrames = 0;
-      }
-
-      // Active cry episode: maintained by YAMNet confirmation or consecutive edge pitch
+      // Active cry episode: STRICTLY requires prior YAMNet confirmation via HTTP!
       bool isCryEpisodeActive = (now - lastCryDetectedTime < 5000) && (soundLevel >= 45.0f);
 
       if (isCryEpisodeActive) {
         babyStatus = "🚨 BABY CRYING DETECTED";
         classification = "BABY_CRYING_DETECTED";
         confidence = 0.92f;
-      } else if (isCryPitch) {
-        babyStatus = "⚠️ POSSIBLE BABY CRY";
+      } else if (isCryPitchCandidate && soundLevel >= 55.0f) {
+        // Candidate cry pitch waiting for YAMNet audio chunk verification
+        babyStatus = "NOT BABY CRYING";
         classification = "POSSIBLE_CRYING";
-        confidence = 0.85f;
+        confidence = 0.70f;
       } else if (soundLevel >= 65.0f) {
         classification = "HIGH_SOUND";
         babyStatus = "NOT BABY CRYING";
