@@ -88,6 +88,8 @@ class AuthoritativeClassificationResponse(BaseModel):
     source: str = "yamnet_neural_classifier"
     sound_intensity: str = "LOW SOUND"     # "HIGH SOUND", "MODERATE SOUND", "LOW SOUND"
     sound_level_db: float = 0.0
+    dataset_similarity: Optional[float] = None
+    dataset_matched: Optional[bool] = None
     top_classes: List[dict] = []
     reason: Optional[str] = None
 

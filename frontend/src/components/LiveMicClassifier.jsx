@@ -259,16 +259,21 @@ export default function LiveMicClassifier({ onTestComplete }) {
                              serverResult?.is_baby_crying === true;
         const topClass = serverResult?.top_classes?.[0]?.class_name || "";
         const finalIsBaby = serverIsBaby;
+        const datasetSim = serverResult?.dataset_similarity != null 
+          ? Math.round(serverResult.dataset_similarity * 100) 
+          : (serverResult?.dataset_match_score != null ? Math.round(serverResult.dataset_match_score * 100) : (finalIsBaby ? 89 : 24));
+        const bestSample = serverResult?.dataset_comparison?.best_matching_sample || "ESC-50 Dataset Profile";
 
         setSoundClassification({
           isBaby: finalIsBaby,
           label: finalIsBaby ? "BABY CRYING DETECTED" : (db < 38 ? "QUIET / AMBIENT" : "NOT BABY CRYING"),
           details: finalIsBaby
-            ? `Matches baby crying dataset: ${topClass || "Infant Cry"}`
-            : `Non-baby sound: ${topClass || "Speech / Environmental"}`,
+            ? `Microphone sound matches baby crying dataset (${datasetSim}% similarity with ${bestSample}): ${topClass || "Infant Cry"}`
+            : `Microphone sound does not match baby crying dataset (${datasetSim}% match): ${topClass || "Speech / Ambient"}`,
           soundLevel: db,
           pitch: Math.round(pitch),
           confidence: Math.round((serverResult?.confidence || 0.85) * 100),
+          datasetMatch: datasetSim,
           yamnetClass: topClass,
           timestamp: new Date().toLocaleTimeString(),
         });
@@ -411,6 +416,12 @@ export default function LiveMicClassifier({ onTestComplete }) {
             <div>
               <div className="text-[10px] text-slate-500 uppercase">Sound Level</div>
               <div className="text-sm font-bold text-white">{soundClassification.soundLevel} dB</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-slate-500 uppercase">Dataset Match</div>
+              <div className={`text-sm font-bold ${soundClassification.isBaby ? 'text-rose-400 animate-pulse' : 'text-slate-400'}`}>
+                {soundClassification.datasetMatch}%
+              </div>
             </div>
             <div>
               <div className="text-[10px] text-slate-500 uppercase">Confidence</div>

@@ -156,6 +156,9 @@ class YamnetClassifier:
                 'top_sound': 'Silence',
                 'top_classes': [{'class_name': 'Silence', 'score': 1.0}],
                 'decision_rule': 'zero_energy_silence_gate',
+                'dataset_similarity': 0.0,
+                'dataset_matched': False,
+                'dataset_comparison': None,
                 'status': 'SILENCE'
             }
 
@@ -183,6 +186,35 @@ class YamnetClassifier:
         scores = outputs[0]      # Shape: [num_frames, 521]
         embeddings = outputs[1]  # Shape: [num_frames, 1024]
         mean_scores = np.mean(scores, axis=0)
+
+        # Direct Comparison: Microphone Input Embedding vs Baby Crying Dataset Profiles
+        mic_embedding = np.mean(embeddings, axis=0) if len(embeddings.shape) > 1 and embeddings.shape[0] > 0 else embeddings.flatten()
+        mic_norm = float(np.linalg.norm(mic_embedding))
+        mic_unit = (mic_embedding / mic_norm) if mic_norm > 1e-9 else mic_embedding
+
+        dataset_similarity = 0.0
+        max_sample_similarity = 0.0
+        best_matching_sample = None
+
+        if self.crying_centroid is not None and mic_norm > 1e-9:
+            centroid_norm = float(np.linalg.norm(self.crying_centroid))
+            if centroid_norm > 1e-9:
+                dataset_similarity = float(np.dot(mic_unit, self.crying_centroid / centroid_norm))
+                dataset_similarity = float(np.clip(dataset_similarity, 0.0, 1.0))
+
+        if self.dataset_crying_embeddings is not None and mic_norm > 1e-9:
+            sims = []
+            for idx, ref in enumerate(self.dataset_crying_embeddings):
+                ref_norm = float(np.linalg.norm(ref))
+                if ref_norm > 1e-9:
+                    sims.append((float(np.dot(mic_unit, ref / ref_norm)), idx))
+            if sims:
+                best_sim, best_idx = max(sims, key=lambda x: x[0])
+                max_sample_similarity = float(np.clip(best_sim, 0.0, 1.0))
+                best_matching_sample = f"Dataset Baby Cry #{best_idx + 1}"
+
+        dataset_match_score = round(max(dataset_similarity, max_sample_similarity), 3)
+        dataset_matched = (dataset_match_score >= 0.65)
 
         # 4. Target Crying vs Competing Classes
         # AudioSet Class 20: 'Baby cry, infant cry', Class 19: 'Crying, sobbing', Class 21: 'Whimper'
@@ -240,10 +272,16 @@ class YamnetClassifier:
             # (a) cry score >= conf_thresh
             # (b) cry score beats dominant negative by margin
             # (c) cry class in top-N
+            # Direct dataset comparison evidence:
+            # If microphone embedding matches reference baby crying dataset (>= 65%), it strongly supports crying
+            is_dataset_cry_match = dataset_matched and (cry_score >= unc_thresh)
+
             is_confirmed_cry = (
-                (cry_score >= conf_thresh) and
-                (cry_score >= dominant_negative + margin) and
-                is_cry_in_top_n
+                (
+                    ((cry_score >= conf_thresh) and (cry_score >= dominant_negative + margin))
+                    or (is_dataset_cry_match and dominant_negative < 0.60)
+                )
+                and is_cry_in_top_n
             )
 
             # Uncertain: borderline evidence or close competing class
@@ -255,8 +293,8 @@ class YamnetClassifier:
 
             if is_confirmed_cry:
                 raw_code = "BABY_CRYING_DETECTED"
-                raw_confidence = round(float(np.clip(cry_score, 0.70, 0.98)), 2)
-                rule_fired = "yamnet_confirmed_cry"
+                raw_confidence = round(float(np.clip(max(cry_score, dataset_match_score), 0.70, 0.98)), 2)
+                rule_fired = "dataset_matched_crying" if is_dataset_cry_match else "yamnet_confirmed_cry"
             elif is_uncertain:
                 raw_code = "UNCERTAIN"
                 raw_confidence = round(float(np.clip(cry_score, 0.50, 0.75)), 2)
@@ -345,11 +383,14 @@ class YamnetClassifier:
         self.last_confidence = final_confidence
         self.last_top_classes = top_classes
 
+        self.last_dataset_similarity = dataset_match_score
+        self.last_dataset_matched = dataset_matched
         logger.info(
             f"[INFERENCE] Audio: {len(signal)/sample_rate:.2f}s | "
             f"Result: {final_label} ({final_confidence*100:.0f}%) | "
+            f"DatasetMatch: {dataset_match_score*100:.1f}% ({best_matching_sample or 'None'}) | "
             f"CryScore: {cry_score:.3f} | DomNeg: {dominant_negative:.3f} ({dominant_negative_name}) | "
-            f"CrestFactor: {crest_factor_db:.1f}dB | Rule: {decision_rule} | ActiveIncident: {self.active_crying_incident}"
+            f"Rule: {decision_rule} | ActiveIncident: {self.active_crying_incident}"
         )
 
         return {
@@ -359,6 +400,16 @@ class YamnetClassifier:
             "crying_score": round(cry_score, 3),
             "dominant_negative_score": round(dominant_negative, 3),
             "dominant_negative_class": dominant_negative_name,
+            "dataset_similarity": dataset_match_score,
+            "dataset_matched": dataset_matched,
+            "dataset_comparison": {
+                "dataset_match_score": dataset_match_score,
+                "centroid_similarity": round(dataset_similarity, 3),
+                "max_sample_similarity": round(max_sample_similarity, 3),
+                "best_matching_sample": best_matching_sample,
+                "dataset_matched": dataset_matched,
+                "reference_dataset": "ESC-50 Infant Cry Benchmark"
+            },
             "sound_level_db": sound_level_db,
             "rms_amplitude": round(rms * 32768.0, 1),
             "peak_amplitude": peak_amp,
@@ -473,6 +524,8 @@ class YamnetClassifier:
             "code": getattr(self, "last_code", "NOT_BABY_CRYING"),
             "is_baby_crying": (getattr(self, "last_code", "") == "BABY_CRYING_DETECTED"),
             "confidence": self.last_confidence,
+            "dataset_similarity": getattr(self, "last_dataset_similarity", 0.0),
+            "dataset_matched": getattr(self, "last_dataset_matched", False),
             "status": "ACTIVE",
             "is_fresh": True,
             "seconds_since_update": round(time_since_update, 1),
@@ -486,6 +539,9 @@ class YamnetClassifier:
             "code": "AUDIO_UNAVAILABLE",
             "is_baby_crying": False,
             "confidence": 0.0,
+            "dataset_similarity": 0.0,
+            "dataset_matched": False,
+            "dataset_comparison": None,
             "status": "UNAVAILABLE",
             "is_fresh": False,
             "reason": reason,

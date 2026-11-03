@@ -62,6 +62,8 @@ class MonitorService:
                     "classification": std_label,
                     "code": std_code,
                     "confidence": round(float(yamnet_status.get("confidence", 0.85)), 2),
+                    "dataset_similarity": yamnet_status.get("dataset_similarity"),
+                    "dataset_matched": yamnet_status.get("dataset_matched"),
                     "timestamp": yamnet_status.get("last_update") or now.isoformat(),
                     "reading_id": None,
                     "event_id": None,
@@ -189,7 +191,9 @@ class MonitorService:
         reading_in: ReadingCreate,
         classification: Optional[str] = None,
         confidence: Optional[float] = None,
-        source: Optional[str] = None
+        source: Optional[str] = None,
+        dataset_similarity: Optional[float] = None,
+        dataset_matched: Optional[bool] = None
     ) -> SensorReading:
         now = utc_now()
         recorded_at = reading_in.recorded_at or now
@@ -355,10 +359,21 @@ class MonitorService:
 
         # Synchronize single authoritative classification state
         is_cry = (final_reading_class == "BABY_CRYING_DETECTED")
+        if dataset_similarity is None:
+            try:
+                from app.audio.yamnet_classifier import YamnetClassifier
+                classifier = YamnetClassifier.get_instance()
+                dataset_similarity = getattr(classifier, "last_dataset_similarity", None)
+                dataset_matched = getattr(classifier, "last_dataset_matched", None)
+            except Exception:
+                pass
+
         auth_state = {
             "classification": std_label,
             "code": std_code,
             "confidence": round(float(final_reading_conf), 2) if final_reading_conf is not None else None,
+            "dataset_similarity": round(float(dataset_similarity), 3) if dataset_similarity is not None else None,
+            "dataset_matched": dataset_matched,
             "timestamp": recorded_at.isoformat(),
             "reading_id": reading.id,
             "event_id": ev.id if ev else None,

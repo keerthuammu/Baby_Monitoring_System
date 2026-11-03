@@ -155,6 +155,14 @@ export default function MetricCards({
             {classificationBadge.engine}
           </span>
         </div>
+        {audioStatus?.dataset_similarity != null && audioStatus.dataset_similarity > 0 && (
+          <div className="mt-1.5 flex items-center justify-between text-[11px] font-mono">
+            <span className="text-slate-400">Dataset Match</span>
+            <span className={audioStatus.dataset_similarity >= 0.65 ? "text-rose-400 font-bold" : "text-slate-400"}>
+              {Math.round(audioStatus.dataset_similarity * 100)}% match
+            </span>
+          </div>
+        )}
       </div>
 
       {/* 2. Live Sound Level (dB) & Sound Intensity Card */}

@@ -123,6 +123,9 @@ async def classify_audio_sample(
         "code": classification,
         "is_baby_crying": (classification == "BABY_CRYING_DETECTED" or display_label == "BABY CRYING DETECTED"),
         "confidence": confidence,
+        "dataset_similarity": result.get("dataset_similarity", 0.0),
+        "dataset_matched": result.get("dataset_matched", False),
+        "dataset_comparison": result.get("dataset_comparison", {}),
         "sound_level_db": result["sound_level_db"],
         "top_classes": result.get("top_classes", [])
     }
@@ -198,7 +201,9 @@ async def test_classify_audio(
         "code": classification,
         "is_baby_crying": (classification == "BABY_CRYING_DETECTED"),
         "confidence": confidence,
-        "dataset_match_score": result.get("dataset_match_score", 0.0),
+        "dataset_similarity": result.get("dataset_similarity", 0.0),
+        "dataset_matched": result.get("dataset_matched", False),
+        "dataset_comparison": result.get("dataset_comparison", {}),
         "sound_level_db": result["sound_level_db"],
         "top_classes": result.get("top_classes", []),
         "crying_score_raw": result.get("crying_score_raw", 0.0)
