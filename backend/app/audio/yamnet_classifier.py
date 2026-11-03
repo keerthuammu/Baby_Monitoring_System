@@ -268,41 +268,39 @@ class YamnetClassifier:
             raw_confidence = 0.90
             rule_fired = "transient_impulse_veto"
         else:
-            # Must satisfy ALL of:
-            # (a) cry score >= conf_thresh
-            # (b) cry score beats dominant negative by margin
-            # (c) cry class in top-N
-            # Direct dataset comparison evidence:
-            # If microphone embedding matches reference baby crying dataset (>= 65%), it strongly supports crying
-            is_dataset_cry_match = dataset_matched and (cry_score >= unc_thresh)
-
+            # HARD CONSTRAINT: Microphone input MUST match the benchmark dataset positive crying baby sounds!
+            # If microphone embedding does not match benchmark positive crying sounds (dataset_matched == False),
+            # it must strictly be NOT BABY CRYING ("non baby crying").
             is_confirmed_cry = (
-                (
-                    ((cry_score >= conf_thresh) and (cry_score >= dominant_negative + margin))
-                    or (is_dataset_cry_match and dominant_negative < 0.60)
-                )
-                and is_cry_in_top_n
+                dataset_matched                     # 1. MUST match positive crying sounds in benchmark dataset (>= 0.65)
+                and is_cry_in_top_n                 # 2. Infant cry/sobbing/whimper in top detected classes
+                and (cry_score >= unc_thresh)       # 3. Infant cry acoustic energy present
+                and (cry_score >= dominant_negative + margin or cry_score >= conf_thresh or dataset_match_score >= 0.70)
+                and (dominant_negative < 0.60)      # 4. Not dominated by adult speech, music, dog, or clapping
+                and not is_transient_impulse        # 5. Not a sudden transient clap or door slam
             )
 
-            # Uncertain: borderline evidence or close competing class
+            # Borderline similarity or acoustic evidence -> UNCERTAIN
             is_uncertain = (
-                (cry_score >= unc_thresh) and
-                (is_cry_in_top_n or cry_score >= dominant_negative - 0.05) and
-                (dominant_negative < 0.65)
+                not is_confirmed_cry
+                and (dataset_match_score >= 0.50)
+                and (cry_score >= unc_thresh)
+                and (is_cry_in_top_n or cry_score >= dominant_negative - 0.05)
+                and (dominant_negative < 0.65)
             )
 
             if is_confirmed_cry:
                 raw_code = "BABY_CRYING_DETECTED"
-                raw_confidence = round(float(np.clip(max(cry_score, dataset_match_score), 0.70, 0.98)), 2)
-                rule_fired = "dataset_matched_crying" if is_dataset_cry_match else "yamnet_confirmed_cry"
+                raw_confidence = round(float(np.clip(max(cry_score, dataset_match_score), 0.75, 0.98)), 2)
+                rule_fired = "benchmark_dataset_matched_crying"
             elif is_uncertain:
                 raw_code = "UNCERTAIN"
-                raw_confidence = round(float(np.clip(cry_score, 0.50, 0.75)), 2)
-                rule_fired = "yamnet_uncertain_band"
+                raw_confidence = round(float(np.clip(dataset_match_score, 0.50, 0.75)), 2)
+                rule_fired = "benchmark_dataset_uncertain_band"
             else:
                 raw_code = "NOT_BABY_CRYING"
                 raw_confidence = round(float(np.clip(max(dominant_negative, 0.85), 0.70, 0.98)), 2)
-                rule_fired = "yamnet_dominant_negative"
+                rule_fired = "benchmark_dataset_mismatch_not_crying"
 
         # 6. Multi-Window Temporal Voting & Hysteresis
         staleness_limit = getattr(settings, "AUDIO_STALENESS_SECONDS", 8.0)

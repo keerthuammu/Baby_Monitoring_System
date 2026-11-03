@@ -270,23 +270,24 @@ class MonitorService:
             engine_name = "Zero-Energy Silence Gate"
             intensity = "LOW SOUND"
         elif classification == "BABY_CRYING_DETECTED" or reading_in.classification == "BABY_CRYING_DETECTED":
-            # Confirmed by YAMNet neural network inference
+            # Confirmed by YAMNet neural network + Benchmark dataset match
             final_reading_class = "BABY_CRYING_DETECTED"
             final_reading_conf = confidence or reading_in.confidence or 0.92
             std_label = "BABY CRYING DETECTED"
             std_code = "BABY_CRYING_DETECTED"
-            engine_name = "Google YAMNet ONNX"
+            engine_name = "YAMNet + Benchmark Dataset Match"
             intensity = "HIGH SOUND" if reading_in.sound_level >= 65.0 else "MODERATE SOUND"
-            ev = MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, "POSSIBLE_CRYING", final_reading_conf or 0.90)
+            # ONLY create an event notification for confirmed baby crying!
+            ev = MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, "BABY_CRYING_DETECTED", final_reading_conf or 0.92)
         elif active_cry and reading_in.sound_level >= 45.0:
-            # Maintain ongoing crying incident during infant breath pauses or continuous distress
+            # Maintain ongoing crying incident during breath pauses
             final_reading_class = "BABY_CRYING_DETECTED"
             final_reading_conf = cry_conf or 0.88
             std_label = "BABY CRYING DETECTED"
             std_code = "BABY_CRYING_DETECTED"
-            engine_name = "Google YAMNet ONNX (Active Incident)"
+            engine_name = "YAMNet + Benchmark Dataset (Active Incident)"
             intensity = "HIGH SOUND" if reading_in.sound_level >= 65.0 else "MODERATE SOUND"
-            ev = MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, "POSSIBLE_CRYING", final_reading_conf)
+            ev = MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, "BABY_CRYING_DETECTED", final_reading_conf)
         elif classification == "UNCERTAIN" or reading_in.classification == "UNCERTAIN":
             final_reading_class = "UNCERTAIN"
             final_reading_conf = confidence or reading_in.confidence or 0.70
@@ -294,15 +295,16 @@ class MonitorService:
             std_code = "UNCERTAIN"
             engine_name = "Google YAMNet ONNX"
             intensity = "HIGH SOUND" if reading_in.sound_level >= 65.0 else "MODERATE SOUND"
-        elif reading_in.classification == "POSSIBLE_CRYING" or (reading_in.pitch_hz and 320.0 <= reading_in.pitch_hz <= 720.0 and reading_in.sound_level >= 50.0):
-            # Edge pitch detected candidate cry frequency, awaiting YAMNet confirmation
+            ev = None
+        elif reading_in.classification == "POSSIBLE_CRYING":
+            # Edge pitch candidate awaiting YAMNet confirmation - NEVER create a notification on pitch alone!
             final_reading_class = "UNCERTAIN"
             final_reading_conf = reading_in.confidence or 0.85
             std_label = "UNCERTAIN"
             std_code = "UNCERTAIN"
             engine_name = "Acoustic Pitch Autocorrelation"
             intensity = "HIGH SOUND" if reading_in.sound_level >= 65.0 else "MODERATE SOUND"
-            ev = MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, "POSSIBLE_CRYING", final_reading_conf or 0.85)
+            ev = None
         else:
             # High sound or calm room without infant crying
             final_reading_class = "NOT_BABY_CRYING"
@@ -310,8 +312,8 @@ class MonitorService:
             std_label = "NOT BABY CRYING"
             std_code = "NOT_BABY_CRYING"
             intensity = "HIGH SOUND" if reading_in.sound_level >= 65.0 else ("MODERATE SOUND" if reading_in.sound_level >= 45.0 else "LOW SOUND")
-            if reading_in.sound_level >= settings.SOUND_HIGH_THRESHOLD:
-                ev = MonitorService._handle_elevated_sound_event(db, reading_in.device_id, now, "HIGH_SOUND_ACTIVITY", 0.85)
+            # HARD RULE: Non-crying sounds (claps, loud room sound) do NOT generate an event notification!
+            ev = None
 
         # Create reading with persistent classification (resilient to schema migrations)
         try:
@@ -490,6 +492,8 @@ class MonitorService:
             query = query.filter(CryingEvent.device_id == device_id)
         if unack_only:
             query = query.filter(CryingEvent.acknowledged == False)
+        # Exclusively return confirmed baby crying incidents, filtering out non-crying alerts
+        query = query.filter(CryingEvent.classification == "BABY_CRYING_DETECTED")
         return query.order_by(desc(CryingEvent.start_time)).offset(offset).limit(limit).all()
 
     @staticmethod

@@ -70,23 +70,41 @@ def test_get_readings_history(client):
 
 def test_elevated_sound_creates_event(client):
     headers = {"X-API-Key": settings.API_KEY}
-    # Sound level higher than threshold (65 dB)
-    payload = {
+    # High sound without baby crying does NOT generate an alert event
+    payload_high_sound = {
         "device_id": "esp32-test-01",
         "sound_level": 74.5,
         "rms_amplitude": 650.0,
-        "peak_amplitude": 1500
+        "peak_amplitude": 1500,
+        "classification": "NOT_BABY_CRYING"
     }
-    res = client.post("/api/readings", json=payload, headers=headers)
+    res = client.post("/api/readings", json=payload_high_sound, headers=headers)
     assert res.status_code == 201
 
-    # Check that an event was generated
+    # Verified: No event generated for non-crying high sound
     events_res = client.get("/api/events")
     assert events_res.status_code == 200
     events = events_res.json()
-    assert len(events) >= 1
-    assert events[0]["classification"] == "HIGH_SOUND_ACTIVITY"
-    assert events[0]["acknowledged"] is False
+    assert len(events) == 0
+
+    # Confirmed baby crying reading DOES generate an alert event
+    payload_crying = {
+        "device_id": "esp32-test-01",
+        "sound_level": 72.0,
+        "rms_amplitude": 1200.0,
+        "peak_amplitude": 8000,
+        "classification": "BABY_CRYING_DETECTED",
+        "confidence": 0.94
+    }
+    res2 = client.post("/api/readings", json=payload_crying, headers=headers)
+    assert res2.status_code == 201
+
+    events_res2 = client.get("/api/events")
+    assert events_res2.status_code == 200
+    events2 = events_res2.json()
+    assert len(events2) >= 1
+    assert events2[0]["classification"] == "BABY_CRYING_DETECTED"
+    assert events2[0]["acknowledged"] is False
 
 def test_acknowledge_event(client):
     # Get the latest event

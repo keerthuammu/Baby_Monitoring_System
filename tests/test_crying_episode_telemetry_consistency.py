@@ -67,5 +67,5 @@ def test_telemetry_inherits_yamnet_crying_episode(client):
     assert events_res.status_code == 200
     events = events_res.json()
     assert len(events) >= 1
-    assert events[0]["classification"] == "POSSIBLE_CRYING"
+    assert events[0]["classification"] == "BABY_CRYING_DETECTED"
     assert all(e["classification"] != "HIGH_SOUND_ACTIVITY" for e in events)

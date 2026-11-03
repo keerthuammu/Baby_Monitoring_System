@@ -113,12 +113,37 @@ export default function App() {
     (audioStatus?.code === 'BABY_CRYING_DETECTED' || audioStatus?.classification === 'BABY CRYING DETECTED')
   );
 
+  // Browser Desktop Notification for Confirmed Baby Crying
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {});
+    }
+  }, []);
+
+  const prevCryingRef = useRef(false);
+  useEffect(() => {
+    if (isLiveCrying && !prevCryingRef.current) {
+      if ('Notification' in window && Notification.permission === 'granted') {
+        try {
+          new Notification('🚨 Baby Crying Detected!', {
+            body: `Infant crying confirmed in nursery (${((audioStatus?.confidence || 0.92) * 100).toFixed(0)}% confidence).`,
+            icon: '/vite.svg',
+            tag: 'baby-crying-notification'
+          });
+        } catch (e) {
+          console.warn('Could not display notification:', e);
+        }
+      }
+    }
+    prevCryingRef.current = isLiveCrying;
+  }, [isLiveCrying, audioStatus]);
+
   // Active Alert Banner:
   // Strictly agrees with current authoritative live status.
   // A historical unacknowledged event is only displayed if it is actively ongoing or concluded within the freshness window (< 10 seconds).
   // If the baby has stopped crying and current audio is NOT BABY CRYING, UNCERTAIN, or AUDIO UNAVAILABLE,
   // the top alert banner does NOT display an outdated crying incident.
-  const unacknowledgedEvent = events.find(e => !e.acknowledged && (e.classification === 'POSSIBLE_CRYING' || e.classification === 'BABY_CRYING_DETECTED'));
+  const unacknowledgedEvent = events.find(e => !e.acknowledged && e.classification === 'BABY_CRYING_DETECTED');
   const eventTime = unacknowledgedEvent?.end_time || unacknowledgedEvent?.start_time;
   const isEventRecent = eventTime ? (Date.now() - new Date(eventTime).getTime() < 10000) : false;
 

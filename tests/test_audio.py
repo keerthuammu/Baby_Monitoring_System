@@ -76,7 +76,7 @@ def test_audio_endpoint_upload_crying(client):
     assert events_res.status_code == 200
     events = events_res.json()
     assert len(events) >= 1
-    assert events[0]["classification"] == "POSSIBLE_CRYING"
+    assert events[0]["classification"] == "BABY_CRYING_DETECTED"
 
 def test_audio_endpoint_unauthorized(client):
     sig = create_synthetic_audio(freq_hz=480.0)
